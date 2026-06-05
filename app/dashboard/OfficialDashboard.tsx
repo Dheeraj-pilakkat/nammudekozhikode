@@ -3,7 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { FaHome, FaFileAlt, FaHardHat, FaCog, FaBell, FaSearch, FaCheckCircle, FaExclamationTriangle, FaClock, FaUserCircle, FaFilter, FaPlus, FaChevronDown, FaChevronLeft, FaChevronRight, FaTrash, FaCheck, FaChartBar, FaSignOutAlt, FaRoad, FaTint, FaLightbulb, FaUser, FaCalendarAlt, FaMapMarkerAlt, FaEye, FaEyeSlash } from 'react-icons/fa';
+import { FaHome, FaFileAlt, FaHardHat, FaCog, FaBell, FaSearch, FaCheckCircle, FaExclamationTriangle, FaClock, FaUserCircle, FaFilter, FaPlus, FaChevronDown, FaChevronLeft, FaChevronRight, FaTrash, FaCheck, FaChartBar, FaSignOutAlt, FaRoad, FaTint, FaLightbulb, FaUser, FaCalendarAlt, FaMapMarkerAlt, FaEye, FaEyeSlash, FaBuilding } from 'react-icons/fa';
+import { db, isFirebaseEnabled } from '../lib/firebase';
+import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { DEFAULT_WARDS, generateRandomCoords, Ward } from '../lib/wards';
 
 interface Report {
   id: string;
@@ -29,21 +32,26 @@ interface Engineer {
   hasAccess: boolean;
 }
 
-const defaultEngineers: Engineer[] = [
-  { id: 'ENG-101', name: 'Ramesh K.', dept: 'Roads Dept', mobile: '+919876543210', email: 'ramesh.k@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
-  { id: 'ENG-102', name: 'Sunil V.', dept: 'Electrical Dept', mobile: '+919876543211', email: 'sunil.v@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
-  { id: 'ENG-103', name: 'Priya M.', dept: 'Water Dept', mobile: '+919876543212', email: 'priya.m@kozhikode.gov.in', password: 'engineer123', status: 'Available', hasAccess: true },
-  { id: 'ENG-104', name: 'Team Alpha', dept: 'Sanitation Crew', mobile: '+919876543213', email: 'alpha.sani@kozhikode.gov.in', password: 'engineer123', status: 'Busy', hasAccess: false }
-];
+const defaultEngineers: Engineer[] = [];
 
 export default function OfficialDashboard() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
-  const [reports, setReports] = useState<Report[]>([]);
+  const [allReports, setAllReports] = useState<Report[]>([]);
+  const reports = user?.ward && user.ward !== 'Corporation Head Office'
+    ? allReports.filter((r: Report) => r.ward === user.ward)
+    : allReports;
   const [activeTab, setActiveTab] = useState('Overview');
   const [showNotifications, setShowNotifications] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [mounted, setMounted] = useState(false);
+
+  // Dynamic Wards Registry
+  const [wardsList, setWardsList] = useState<Ward[]>([]);
+  const [newWardId, setNewWardId] = useState('');
+  const [newWardName, setNewWardName] = useState('');
+  const [wardSuccessMsg, setWardSuccessMsg] = useState('');
+  const [wardErrorMsg, setWardErrorMsg] = useState('');
 
   // Administrative Filters & Controls
   const [reportStatus, setReportStatus] = useState('All');
@@ -71,22 +79,12 @@ export default function OfficialDashboard() {
   const [analyticsMonth, setAnalyticsMonth] = useState('All Months');
 
   // Notifications List
-  const [notifications, setNotifications] = useState([
-    { id: 1, type: 'alert', title: 'New high priority report:', boldText: 'Water Main Burst', suffix: 'in Ward 12.', time: '2 mins ago', read: false },
-    { id: 2, type: 'success', title: 'Ramesh K. marked', boldText: '#REP-2040', suffix: 'as Resolved.', time: '1 hour ago', read: false },
-    { id: 3, type: 'info', title: 'Weekly resolution report is ready to download.', boldText: '', suffix: '', time: '1 day ago', read: true }
-  ]);
+  const [notifications, setNotifications] = useState<any[]>([]);
 
-  const defaultReports: Report[] = [
-    { id: 'REP-2041', title: 'Pothole on Beach Road', category: 'Roads', status: 'In Progress', date: '2026-06-04', assignee: 'Ramesh K.', reporter: 'Devi Prasad', ward: 'Ward 12', description: 'Large pothole near the beach parking lot causing traffic bottlenecks.' },
-    { id: 'REP-2040', title: 'Broken Streetlight', category: 'Electricity', status: 'Resolved', date: '2026-06-03', assignee: 'Sunil V.', reporter: 'Devi Prasad', ward: 'Ward 12', description: 'Streetlight post #14 has been dark for three days near the park entry.' },
-    { id: 'REP-2039', title: 'Water Pipe Leak', category: 'Water', status: 'Pending', date: '2026-06-02', assignee: 'Unassigned', reporter: 'Anjali S.', ward: 'Ward 4', description: 'Substantial water leaking from pavement joint near post office.' },
-    { id: 'REP-2038', title: 'Fallen Tree Branch', category: 'Sanitation', status: 'Resolved', date: '2026-05-29', assignee: 'Team Alpha', reporter: 'Vikram J.', ward: 'Ward 12', description: 'Large branch blocking the pedestrian path on SM Street.' }
-  ];
+  const defaultReports: Report[] = [];
 
   useEffect(() => {
     setMounted(true);
-    // Auth Check
     const storedUser = localStorage.getItem('nammude_user');
     if (!storedUser) {
       router.push('/auth');
@@ -99,21 +97,103 @@ export default function OfficialDashboard() {
     }
     setUser(parsedUser);
 
-    // Initialize Database
-    const storedReports = localStorage.getItem('nammude_reports');
-    if (storedReports) {
-      setReports(JSON.parse(storedReports));
-    } else {
-      localStorage.setItem('nammude_reports', JSON.stringify(defaultReports));
-      setReports(defaultReports);
-    }
+    if (isFirebaseEnabled) {
+      // Real-time access check
+      const unsubAccess = onSnapshot(doc(db, 'users', parsedUser.uid || parsedUser.id || ''), (docSnap) => {
+        if (docSnap.exists()) {
+          const currentProfile = docSnap.data();
+          if (currentProfile && currentProfile.hasAccess === false) {
+            localStorage.removeItem('nammude_user');
+            router.push('/auth?error=revoked');
+          }
+        }
+      }, (err) => {
+        console.error("Access verification error:", err);
+      });
 
-    const storedEngineers = localStorage.getItem('nammude_engineers');
-    if (storedEngineers) {
-      setEngineersList(JSON.parse(storedEngineers));
+      const unsubReports = onSnapshot(collection(db, 'reports'), (snapshot) => {
+        const fetchedReports: Report[] = [];
+        snapshot.forEach((doc) => {
+          fetchedReports.push(doc.data() as Report);
+        });
+        fetchedReports.sort((a, b) => b.id.localeCompare(a.id));
+        setAllReports(fetchedReports);
+      }, (err) => {
+        console.error("Failed to load reports from Firestore:", err);
+      });
+
+      const unsubEngineers = onSnapshot(collection(db, 'engineers'), (snapshot) => {
+        const fetchedEngineers: Engineer[] = [];
+        snapshot.forEach((doc) => {
+          fetchedEngineers.push(doc.data() as Engineer);
+        });
+        fetchedEngineers.sort((a, b) => a.name.localeCompare(b.name));
+        setEngineersList(fetchedEngineers);
+      }, (err) => {
+        console.error("Failed to load engineers from Firestore:", err);
+      });
+
+      const unsubWards = onSnapshot(collection(db, 'wards'), async (snapshot) => {
+        if (snapshot.empty) {
+          // Auto-seed default wards
+          for (const w of DEFAULT_WARDS) {
+            await setDoc(doc(db, 'wards', w.id), w);
+          }
+        } else {
+          const list: Ward[] = [];
+          snapshot.forEach((doc) => {
+            list.push(doc.data() as Ward);
+          });
+          list.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+          setWardsList(list);
+        }
+      }, (err) => {
+        console.error("Failed to load wards from Firestore:", err);
+      });
+
+      return () => {
+        unsubReports();
+        unsubEngineers();
+        unsubAccess();
+        unsubWards();
+      };
     } else {
-      localStorage.setItem('nammude_engineers', JSON.stringify(defaultEngineers));
-      setEngineersList(defaultEngineers);
+      // Local fallback access check
+      const storedOfficials = localStorage.getItem('nammude_officials_list');
+      if (storedOfficials) {
+        const officialsList = JSON.parse(storedOfficials);
+        const currentProfile = officialsList.find((off: any) => off.email.toLowerCase() === parsedUser.email.toLowerCase());
+        if (currentProfile && currentProfile.hasAccess === false) {
+          localStorage.removeItem('nammude_user');
+          router.push('/auth?error=revoked');
+          return;
+        }
+      }
+
+      // Initialize Database
+      const storedReports = localStorage.getItem('nammude_reports');
+      if (storedReports) {
+        setAllReports(JSON.parse(storedReports));
+      } else {
+        localStorage.setItem('nammude_reports', JSON.stringify(defaultReports));
+        setAllReports(defaultReports);
+      }
+
+      const storedEngineers = localStorage.getItem('nammude_engineers');
+      if (storedEngineers) {
+        setEngineersList(JSON.parse(storedEngineers));
+      } else {
+        localStorage.setItem('nammude_engineers', JSON.stringify(defaultEngineers));
+        setEngineersList(defaultEngineers);
+      }
+
+      const storedWards = localStorage.getItem('nammude_wards');
+      if (storedWards) {
+        setWardsList(JSON.parse(storedWards));
+      } else {
+        localStorage.setItem('nammude_wards', JSON.stringify(DEFAULT_WARDS));
+        setWardsList(DEFAULT_WARDS);
+      }
     }
   }, [router]);
 
@@ -148,15 +228,29 @@ export default function OfficialDashboard() {
   };
 
   // Update Status / Assign Engineer handler
-  const handleUpdateReport = (id: string, status: 'Pending' | 'In Progress' | 'Resolved', assignee: string) => {
-    const updated = reports.map(r => r.id === id ? { ...r, status, assignee } : r);
-    localStorage.setItem('nammude_reports', JSON.stringify(updated));
-    setReports(updated);
+  const handleUpdateReport = async (id: string, status: 'Pending' | 'In Progress' | 'Resolved', assignee: string) => {
+    if (isFirebaseEnabled) {
+      try {
+        const repRef = doc(db, 'reports', id);
+        const reportToUpdate = allReports.find(r => r.id === id);
+        if (reportToUpdate) {
+          await setDoc(repRef, { ...reportToUpdate, status, assignee });
+        } else {
+          await setDoc(repRef, { status, assignee }, { merge: true });
+        }
+      } catch (err) {
+        console.error("Failed to update report status in Firestore:", err);
+      }
+    } else {
+      const updated = allReports.map(r => r.id === id ? { ...r, status, assignee } : r);
+      localStorage.setItem('nammude_reports', JSON.stringify(updated));
+      setAllReports(updated);
+    }
     
     // Add Notification
     const newNotif = {
       id: Date.now(),
-      type: status === 'Resolved' ? 'success' : 'info',
+      type: status === 'Resolved' ? 'success' as const : 'info' as const,
       title: `${assignee} updated ticket`,
       boldText: `#${id}`,
       suffix: `to ${status}.`,
@@ -205,7 +299,7 @@ export default function OfficialDashboard() {
     setNewEngPassword(eng.password || 'engineer123');
   };
 
-  const handleAddEngineer = (e: React.FormEvent) => {
+  const handleAddEngineer = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddSuccess('');
     setAddError('');
@@ -217,23 +311,47 @@ export default function OfficialDashboard() {
 
     if (editingEngineerId) {
       // Update Mode
-      const updated = engineersList.map(eng => {
-        if (eng.id === editingEngineerId) {
-          return {
-            ...eng,
+      if (isFirebaseEnabled) {
+        try {
+          const engRef = doc(db, 'engineers', editingEngineerId);
+          const existingEng = engineersList.find(eng => eng.id === editingEngineerId);
+          const updatedEng = {
+            ...existingEng,
+            id: editingEngineerId,
             name: newEngName,
             dept: newEngDept,
             mobile: newEngMobile,
             email: newEngEmail,
-            password: newEngPassword
+            password: newEngPassword,
+            status: existingEng?.status || 'Available',
+            hasAccess: existingEng ? existingEng.hasAccess : true
           };
+          await setDoc(engRef, updatedEng);
+          setAddSuccess('Field engineer profile updated successfully!');
+        } catch (err: any) {
+          console.error("Firestore update engineer error:", err);
+          setAddError(`Failed to update engineer: ${err.message}`);
+          return;
         }
-        return eng;
-      });
+      } else {
+        const updated = engineersList.map(eng => {
+          if (eng.id === editingEngineerId) {
+            return {
+              ...eng,
+              name: newEngName,
+              dept: newEngDept,
+              mobile: newEngMobile,
+              email: newEngEmail,
+              password: newEngPassword
+            };
+          }
+          return eng;
+        });
 
-      localStorage.setItem('nammude_engineers', JSON.stringify(updated));
-      setEngineersList(updated);
-      setAddSuccess('Field engineer profile updated successfully!');
+        localStorage.setItem('nammude_engineers', JSON.stringify(updated));
+        setEngineersList(updated);
+        setAddSuccess('Field engineer profile updated successfully!');
+      }
       
       // Reset editing states
       setEditingEngineerId(null);
@@ -244,8 +362,9 @@ export default function OfficialDashboard() {
       setShowNewEngPassword(false);
     } else {
       // Create Mode
+      const newId = `ENG-${Math.floor(100 + Math.random() * 900)}`;
       const newEng: Engineer = {
-        id: `ENG-${Math.floor(100 + Math.random() * 900)}`,
+        id: newId,
         name: newEngName,
         dept: newEngDept,
         mobile: newEngMobile,
@@ -255,16 +374,27 @@ export default function OfficialDashboard() {
         hasAccess: true
       };
 
-      const updated = [...engineersList, newEng];
-      localStorage.setItem('nammude_engineers', JSON.stringify(updated));
-      setEngineersList(updated);
+      if (isFirebaseEnabled) {
+        try {
+          await setDoc(doc(db, 'engineers', newId), newEng);
+          setAddSuccess('Field engineer added successfully!');
+        } catch (err: any) {
+          console.error("Firestore add engineer error:", err);
+          setAddError(`Failed to add engineer: ${err.message}`);
+          return;
+        }
+      } else {
+        const updated = [...engineersList, newEng];
+        localStorage.setItem('nammude_engineers', JSON.stringify(updated));
+        setEngineersList(updated);
+        setAddSuccess('Field engineer added successfully!');
+      }
       
       setNewEngName('');
       setNewEngMobile('');
       setNewEngEmail('');
       setNewEngPassword('');
       setShowNewEngPassword(false);
-      setAddSuccess('Field engineer added successfully!');
     }
     
     // Auto-clear success message
@@ -273,37 +403,194 @@ export default function OfficialDashboard() {
     }, 3000);
   };
 
-  const handleToggleAccess = (id: string) => {
-    const updated = engineersList.map(e => e.id === id ? { ...e, hasAccess: !e.hasAccess } : e);
-    localStorage.setItem('nammude_engineers', JSON.stringify(updated));
-    setEngineersList(updated);
+  const handleToggleAccess = async (id: string) => {
+    if (isFirebaseEnabled) {
+      try {
+        const engRef = doc(db, 'engineers', id);
+        const targetEng = engineersList.find(e => e.id === id);
+        if (targetEng) {
+          await setDoc(engRef, { ...targetEng, hasAccess: !targetEng.hasAccess });
+        }
+      } catch (err) {
+        console.error("Failed to toggle engineer access in Firestore:", err);
+      }
+    } else {
+      const updated = engineersList.map(e => e.id === id ? { ...e, hasAccess: !e.hasAccess } : e);
+      localStorage.setItem('nammude_engineers', JSON.stringify(updated));
+      setEngineersList(updated);
+    }
     
     // Dispatch storage event to alert other components of access change
     window.dispatchEvent(new Event('storage'));
   };
 
-  // Dynamic Chart Calculations based on actual localStorage reports
-  const getChartData = () => {
-    // Basic baseline data
-    let baseData = [40, 65, 30, 80, 55, 90, 70, 85, 100, 60, 45, 75];
-    if (analyticsDept === 'Roads') baseData = [15, 25, 10, 30, 20, 35, 25, 30, 40, 20, 15, 25];
-    if (analyticsDept === 'Water') baseData = [10, 15, 5, 20, 10, 25, 15, 20, 25, 15, 10, 20];
-    if (analyticsYear === '2025') baseData = [30, 50, 40, 70, 45, 80, 60, 95, 85, 50, 35, 60];
+  const handleCreateWard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWardErrorMsg('');
+    setWardSuccessMsg('');
 
-    // Read live reports from current month (June) to append/adjust
-    const currentMonthReports = reports.length;
-    // Boost June value (index 5) depending on active tickets
-    baseData[5] = currentMonthReports * 12;
-
-    if (analyticsMonth !== 'All Months') {
-      const monthIndex = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(analyticsMonth);
-      if (monthIndex !== -1) {
-        const newData = new Array(12).fill(0);
-        newData[monthIndex] = baseData[monthIndex];
-        return newData;
-      }
+    if (!newWardId || !newWardName) {
+      setWardErrorMsg('Please fill in both Ward ID and Area Name.');
+      return;
     }
-    return baseData;
+
+    const idTrim = newWardId.trim();
+    const nameTrim = newWardName.trim();
+
+    if (wardsList.some(w => w.id.toLowerCase() === idTrim.toLowerCase())) {
+      setWardErrorMsg('A ward with this ID already exists.');
+      return;
+    }
+
+    const coords = generateRandomCoords();
+    const newWard: Ward = { id: idTrim, name: nameTrim, ...coords };
+
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'wards', idTrim), newWard);
+      } catch (err: any) {
+        console.error("Failed to save ward to Firestore:", err);
+        setWardErrorMsg(`Failed to save ward: ${err.message}`);
+        return;
+      }
+    } else {
+      const updatedList = [...wardsList, newWard];
+      localStorage.setItem('nammude_wards', JSON.stringify(updatedList));
+      setWardsList(updatedList);
+    }
+
+    setWardSuccessMsg(`Ward ${idTrim} (${nameTrim}) added successfully!`);
+    setNewWardId('');
+    setNewWardName('');
+    setTimeout(() => setWardSuccessMsg(''), 3000);
+  };
+
+  const handleRemoveWard = async (wardId: string) => {
+    setWardErrorMsg('');
+    setWardSuccessMsg('');
+
+    if (isFirebaseEnabled) {
+      try {
+        await deleteDoc(doc(db, 'wards', wardId));
+      } catch (err: any) {
+        console.error("Failed to delete ward from Firestore:", err);
+        setWardErrorMsg(`Failed to delete ward: ${err.message}`);
+        return;
+      }
+    } else {
+      const updatedList = wardsList.filter(w => w.id !== wardId);
+      localStorage.setItem('nammude_wards', JSON.stringify(updatedList));
+      setWardsList(updatedList);
+    }
+
+    setWardSuccessMsg(`Ward ${wardId} removed successfully.`);
+    setTimeout(() => setWardSuccessMsg(''), 3000);
+  };
+
+  // Dynamic Chart Calculations based on actual reports
+  const getChartData = () => {
+    if (analyticsMonth === 'All Months') {
+      const counts = new Array(12).fill(0);
+      
+      reports.forEach(report => {
+        if (!report.date) return;
+        
+        // Parse date format: YYYY-MM-DD
+        const dateParts = report.date.split('-');
+        if (dateParts.length < 2) return;
+        
+        const year = dateParts[0];
+        const monthIndex = parseInt(dateParts[1], 10) - 1; // 0-indexed
+        
+        // Match year filter
+        if (analyticsYear !== 'All Years' && year !== analyticsYear) {
+          return;
+        }
+        
+        // Match department filter
+        if (analyticsDept !== 'All Departments') {
+          const dept = analyticsDept.toLowerCase();
+          const category = report.category.toLowerCase();
+          
+          if (dept === 'water') {
+            if (category !== 'water' && category !== 'sanitation') {
+              return;
+            }
+          } else if (dept === 'roads') {
+            if (category !== 'roads') {
+              return;
+            }
+          } else if (dept === 'electricity') {
+            if (category !== 'electricity') {
+              return;
+            }
+          } else {
+            if (!category.includes(dept) && !dept.includes(category)) {
+              return;
+            }
+          }
+        }
+        
+        if (monthIndex >= 0 && monthIndex < 12) {
+          counts[monthIndex] += 1;
+        }
+      });
+      return counts;
+    } else {
+      // Month-wise analytics: Show breakdown by category/department for the selected month: [Roads, Water & Sanitation, Electricity]
+      const counts = new Array(3).fill(0);
+      const selectedMonthIndex = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(analyticsMonth);
+      
+      reports.forEach(report => {
+        if (!report.date) return;
+        const dateParts = report.date.split('-');
+        if (dateParts.length < 2) return;
+        
+        const year = dateParts[0];
+        const monthIndex = parseInt(dateParts[1], 10) - 1;
+
+        if (analyticsYear !== 'All Years' && year !== analyticsYear) {
+          return;
+        }
+
+        if (monthIndex !== selectedMonthIndex) {
+          return;
+        }
+
+        const category = report.category.toLowerCase();
+
+        // Match department filter if not 'All Departments'
+        if (analyticsDept !== 'All Departments') {
+          const dept = analyticsDept.toLowerCase();
+          if (dept === 'water') {
+            if (category !== 'water' && category !== 'sanitation') {
+              return;
+            }
+          } else if (dept === 'roads') {
+            if (category !== 'roads') {
+              return;
+            }
+          } else if (dept === 'electricity') {
+            if (category !== 'electricity') {
+              return;
+            }
+          } else {
+            if (!category.includes(dept) && !dept.includes(category)) {
+              return;
+            }
+          }
+        }
+
+        if (category === 'roads') {
+          counts[0] += 1;
+        } else if (category === 'water' || category === 'sanitation') {
+          counts[1] += 1; // combined "water & sanitation"
+        } else if (category === 'electricity') {
+          counts[2] += 1;
+        }
+      });
+      return counts;
+    }
   };
 
   const chartData = getChartData();
@@ -341,7 +628,10 @@ export default function OfficialDashboard() {
           </div>
 
           <nav style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
-            {['Overview', 'Reports Manager', 'Engineers', 'Analytics'].map(tab => (
+            {(user?.ward === 'Corporation Head Office'
+              ? ['Overview', 'Reports Manager', 'Engineers', 'Analytics', 'Manage Wards']
+              : ['Overview', 'Reports Manager', 'Engineers', 'Analytics']
+            ).map(tab => (
               <button 
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -364,6 +654,7 @@ export default function OfficialDashboard() {
                 {tab === 'Reports Manager' && <FaFileAlt style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {tab === 'Engineers' && <FaHardHat style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {tab === 'Analytics' && <FaChartBar style={{ fontSize: '20px', minWidth: '20px' }} />}
+                {tab === 'Manage Wards' && <FaMapMarkerAlt style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {isSidebarOpen && <span style={{ whiteSpace: 'nowrap' }}>{tab}</span>}
               </button>
             ))}
@@ -1309,6 +1600,13 @@ export default function OfficialDashboard() {
                     <option value="2026">2026</option>
                     <option value="2025">2025</option>
                   </select>
+                  <span style={{ color: 'var(--color-on-surface-variant)', fontWeight: 500 }}>for month</span>
+                  <select value={analyticsMonth} onChange={(e) => setAnalyticsMonth(e.target.value)} style={{ padding: '6px 12px', fontSize: '16px', fontWeight: 'bold', border: '1px solid var(--color-outline-variant)', borderRadius: 'var(--radius-sm)' }}>
+                    <option value="All Months">all months</option>
+                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
                 </h2>
               </div>
 
@@ -1336,8 +1634,126 @@ export default function OfficialDashboard() {
 
                 {/* X labels */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--space-md)', color: 'var(--color-outline)' }}>
-                  {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, idx) => (
-                    <span key={idx} className="label-sm" style={{ width: '100%', textAlign: 'center' }}>{m}</span>
+                  {(analyticsMonth === 'All Months'
+                    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                    : ['Roads', 'Water & Sani', 'Electricity']
+                  ).map((label, idx) => (
+                    <span key={idx} className="label-sm" style={{ width: '100%', textAlign: 'center' }}>{label}</span>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* --- MANAGE WARDS TAB --- */}
+          {activeTab === 'Manage Wards' && user?.ward === 'Corporation Head Office' && (
+            <div className="col-span-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '24px' }}>
+              
+              {/* Add Ward Form Card */}
+              <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)', height: 'fit-content' }}>
+                <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Add Municipal Ward</h3>
+                <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                  Register a new ward section in the city map and dispatch database.
+                </p>
+
+                {wardErrorMsg && (
+                  <div style={{ padding: '10px 14px', backgroundColor: 'var(--color-error-container)', color: 'var(--color-on-error-container)', borderRadius: 'var(--radius-default)', fontSize: '13px', fontWeight: 600, marginBottom: '16px' }}>
+                    {wardErrorMsg}
+                  </div>
+                )}
+
+                {wardSuccessMsg && (
+                  <div style={{ padding: '10px 14px', backgroundColor: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)', borderRadius: 'var(--radius-default)', fontSize: '13px', fontWeight: 600, marginBottom: '16px' }}>
+                    {wardSuccessMsg}
+                  </div>
+                )}
+
+                <form onSubmit={handleCreateWard} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Ward ID / Number</label>
+                    <input 
+                      type="text" 
+                      className="input-field" 
+                      placeholder="e.g. Ward 5" 
+                      value={newWardId}
+                      onChange={e => setNewWardId(e.target.value)}
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-lowest)' }}
+                    />
+                  </div>
+
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Area / Landmark Name</label>
+                    <input 
+                      type="text" 
+                      className="input-field" 
+                      placeholder="e.g. Kallayi" 
+                      value={newWardName}
+                      onChange={e => setNewWardName(e.target.value)}
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-lowest)' }}
+                    />
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    className="btn btn-primary btn-glow"
+                    style={{ borderRadius: 'var(--radius-full)', minHeight: '42px', fontSize: '13px', fontWeight: 700, marginTop: '8px', padding: '0 24px', alignSelf: 'flex-start' }}
+                  >
+                    Add Ward
+                  </button>
+                </form>
+              </div>
+
+              {/* Wards List Card */}
+              <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)' }}>
+                <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Registered Wards Registry</h3>
+                <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-lg)' }}>
+                  Monitor municipal divisions and remove outdated ward areas.
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '520px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {wardsList.map(ward => (
+                    <div 
+                      key={ward.id}
+                      style={{
+                        padding: '16px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--color-outline-variant)',
+                        background: 'var(--color-surface-container-lowest)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div>
+                        <h4 className="label-lg" style={{ fontWeight: 800 }}>{ward.id}</h4>
+                        <p className="label-sm" style={{ color: 'var(--color-outline)', marginTop: '2px' }}>Area: {ward.name}</p>
+                      </div>
+
+                      <button
+                        onClick={() => handleRemoveWard(ward.id)}
+                        disabled={['Ward 12', 'Ward 4', 'Ward 18', 'Ward 9'].includes(ward.id)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: 'var(--radius-full)',
+                          border: 'none',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: ['Ward 12', 'Ward 4', 'Ward 18', 'Ward 9'].includes(ward.id) ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'rgba(186, 26, 26, 0.1)',
+                          color: 'var(--color-error)',
+                          opacity: ['Ward 12', 'Ward 4', 'Ward 18', 'Ward 9'].includes(ward.id) ? 0.5 : 1,
+                          transition: 'all 0.2s ease'
+                        }}
+                        title={['Ward 12', 'Ward 4', 'Ward 18', 'Ward 9'].includes(ward.id) ? "Default system wards cannot be deleted." : "Remove ward"}
+                      >
+                        <FaTrash /> Remove
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

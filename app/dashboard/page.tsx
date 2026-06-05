@@ -5,11 +5,14 @@ import { useRouter } from 'next/navigation';
 import CitizenDashboard from './CitizenDashboard';
 import OfficialDashboard from './OfficialDashboard';
 import EngineerDashboard from './EngineerDashboard';
+import MayorDashboard from './MayorDashboard';
+import { db, isFirebaseEnabled } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function DashboardRouteGuard() {
   const router = useRouter();
   const [loadingText, setLoadingText] = useState('Securing session...');
-  const [role, setRole] = useState<'citizen' | 'official' | 'engineer' | null>(null);
+  const [role, setRole] = useState<'citizen' | 'official' | 'engineer' | 'mayor' | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -25,23 +28,65 @@ export default function DashboardRouteGuard() {
         } else if (user && user.role === 'official') {
           setRole('official');
           setLoading(false);
+        } else if (user && user.role === 'mayor') {
+          setRole('mayor');
+          setLoading(false);
         } else if (user && user.role === 'engineer') {
           // Verify access control state from database
-          const storedEngs = localStorage.getItem('nammude_engineers');
-          if (storedEngs) {
-            const engList = JSON.parse(storedEngs);
-            const currentEng = engList.find((e: any) => e.id === user.id);
-            if (currentEng && !currentEng.hasAccess) {
-              setLoadingText('Access Denied: Portal access has been revoked.');
-              localStorage.removeItem('nammude_user');
-              setTimeout(() => {
-                router.replace('/auth?error=revoked');
-              }, 2000);
-              return;
+          if (isFirebaseEnabled && user.id) {
+            const verifyEngAccess = async () => {
+              try {
+                const engDoc = await getDoc(doc(db, 'engineers', user.id));
+                if (engDoc.exists()) {
+                  const currentEng = engDoc.data();
+                  if (currentEng && !currentEng.hasAccess) {
+                    setLoadingText('Access Denied: Portal access has been revoked.');
+                    localStorage.removeItem('nammude_user');
+                    setTimeout(() => {
+                      router.replace('/auth?error=revoked');
+                    }, 2000);
+                    return;
+                  }
+                }
+                setRole('engineer');
+                setLoading(false);
+              } catch (err) {
+                console.error("Firestore access check failed, checking local:", err);
+                const storedEngs = localStorage.getItem('nammude_engineers');
+                if (storedEngs) {
+                  const engList = JSON.parse(storedEngs);
+                  const currentEng = engList.find((e: any) => e.id === user.id);
+                  if (currentEng && !currentEng.hasAccess) {
+                    setLoadingText('Access Denied: Portal access has been revoked.');
+                    localStorage.removeItem('nammude_user');
+                    setTimeout(() => {
+                      router.replace('/auth?error=revoked');
+                    }, 2000);
+                    return;
+                  }
+                }
+                setRole('engineer');
+                setLoading(false);
+              }
+            };
+            verifyEngAccess();
+          } else {
+            const storedEngs = localStorage.getItem('nammude_engineers');
+            if (storedEngs) {
+              const engList = JSON.parse(storedEngs);
+              const currentEng = engList.find((e: any) => e.id === user.id);
+              if (currentEng && !currentEng.hasAccess) {
+                setLoadingText('Access Denied: Portal access has been revoked.');
+                localStorage.removeItem('nammude_user');
+                setTimeout(() => {
+                  router.replace('/auth?error=revoked');
+                }, 2000);
+                return;
+              }
             }
+            setRole('engineer');
+            setLoading(false);
           }
-          setRole('engineer');
-          setLoading(false);
         } else {
           // Faulty user object
           localStorage.removeItem('nammude_user');
@@ -116,6 +161,10 @@ export default function DashboardRouteGuard() {
 
   if (role === 'engineer') {
     return <EngineerDashboard />;
+  }
+
+  if (role === 'mayor') {
+    return <MayorDashboard />;
   }
 
   return null;

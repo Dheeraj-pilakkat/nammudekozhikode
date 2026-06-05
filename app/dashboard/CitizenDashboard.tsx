@@ -4,6 +4,9 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { FaHome, FaFileAlt, FaExclamationTriangle, FaCheckCircle, FaUser, FaSignOutAlt, FaFileUpload, FaClock, FaCalendarAlt, FaCheck, FaChevronLeft, FaChevronRight, FaPlus, FaChartBar, FaDownload, FaFilter, FaPrint, FaDatabase, FaRoad, FaTint, FaLightbulb, FaTrash, FaMapMarkerAlt, FaTimes } from 'react-icons/fa';
+import { db, isFirebaseEnabled } from '../lib/firebase';
+import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import { DEFAULT_WARDS, Ward } from '../lib/wards';
 
 interface Report {
   id: string;
@@ -26,6 +29,9 @@ export default function CitizenDashboard() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [mounted, setMounted] = useState(false);
 
+  // Dynamic Wards state
+  const [wardsList, setWardsList] = useState<Ward[]>([]);
+
   // Issue Reporter Form State
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Roads');
@@ -42,13 +48,7 @@ export default function CitizenDashboard() {
   const [filterStatus, setFilterStatus] = useState('All');
   const [filterWard, setFilterWard] = useState('All');
 
-  // Initial Mock Reports if local storage is empty
-  const defaultReports: Report[] = [
-    { id: 'REP-2041', title: 'Pothole on Beach Road', category: 'Roads', status: 'In Progress', date: '2026-06-04', assignee: 'Ramesh K.', reporter: 'Devi Prasad', ward: 'Ward 12', description: 'Large pothole near the beach parking lot causing traffic bottlenecks.' },
-    { id: 'REP-2040', title: 'Broken Streetlight', category: 'Electricity', status: 'Resolved', date: '2026-06-03', assignee: 'Sunil V.', reporter: 'Devi Prasad', ward: 'Ward 12', description: 'Streetlight post #14 has been dark for three days near the park entry.' },
-    { id: 'REP-2039', title: 'Water Pipe Leak', category: 'Water', status: 'Pending', date: '2026-06-02', assignee: 'Unassigned', reporter: 'Anjali S.', ward: 'Ward 4', description: 'Substantial water leaking from pavement joint near post office.' },
-    { id: 'REP-2038', title: 'Fallen Tree Branch', category: 'Sanitation', status: 'Resolved', date: '2026-05-29', assignee: 'Team Alpha', reporter: 'Vikram J.', ward: 'Ward 12', description: 'Large branch blocking the pedestrian path on SM Street.' }
-  ];
+  const defaultReports: Report[] = [];
 
   useEffect(() => {
     setMounted(true);
@@ -65,13 +65,60 @@ export default function CitizenDashboard() {
     }
     setUser(parsedUser);
 
-    // Initialize Shared Reports Database in localStorage
-    const storedReports = localStorage.getItem('nammude_reports');
-    if (storedReports) {
-      setReports(JSON.parse(storedReports));
+    if (isFirebaseEnabled) {
+      const unsubReports = onSnapshot(collection(db, 'reports'), (snapshot) => {
+        const fetchedReports: Report[] = [];
+        snapshot.forEach((doc) => {
+          fetchedReports.push(doc.data() as Report);
+        });
+        fetchedReports.sort((a, b) => b.id.localeCompare(a.id));
+        setReports(fetchedReports);
+      }, (err) => {
+        console.error("Firestore reports subscription error:", err);
+        const storedReports = localStorage.getItem('nammude_reports');
+        if (storedReports) {
+          setReports(JSON.parse(storedReports));
+        }
+      });
+
+      const unsubWards = onSnapshot(collection(db, 'wards'), async (snapshot) => {
+        if (snapshot.empty) {
+          for (const w of DEFAULT_WARDS) {
+            await setDoc(doc(db, 'wards', w.id), w);
+          }
+        } else {
+          const list: Ward[] = [];
+          snapshot.forEach((doc) => {
+            list.push(doc.data() as Ward);
+          });
+          list.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+          setWardsList(list);
+        }
+      }, (err) => {
+        console.error("Failed to load wards from Firestore:", err);
+      });
+
+      return () => {
+        unsubReports();
+        unsubWards();
+      };
     } else {
-      localStorage.setItem('nammude_reports', JSON.stringify(defaultReports));
-      setReports(defaultReports);
+      // Initialize Shared Reports Database in localStorage
+      const storedReports = localStorage.getItem('nammude_reports');
+      if (storedReports) {
+        setReports(JSON.parse(storedReports));
+      } else {
+        localStorage.setItem('nammude_reports', JSON.stringify(defaultReports));
+        setReports(defaultReports);
+      }
+
+      const storedWards = localStorage.getItem('nammude_wards');
+      if (storedWards) {
+        setWardsList(JSON.parse(storedWards));
+      } else {
+        localStorage.setItem('nammude_wards', JSON.stringify(DEFAULT_WARDS));
+        setWardsList(DEFAULT_WARDS);
+      }
     }
   }, [router]);
 
@@ -117,7 +164,7 @@ export default function CitizenDashboard() {
     }
   };
 
-  const handleReportSubmit = (e: React.FormEvent) => {
+  const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -127,8 +174,9 @@ export default function CitizenDashboard() {
       return;
     }
 
+    const reportId = `REP-${Math.floor(1000 + Math.random() * 9000)}`;
     const newReport: Report = {
-      id: `REP-${Math.floor(1000 + Math.random() * 9000)}`,
+      id: reportId,
       title,
       category,
       status: 'Pending',
@@ -139,9 +187,21 @@ export default function CitizenDashboard() {
       description
     };
 
-    const updatedReports = [newReport, ...reports];
-    localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
-    setReports(updatedReports);
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'reports', reportId), newReport);
+        setSuccessMsg('Issue submitted successfully to municipality backend!');
+      } catch (err: any) {
+        console.error("Firestore submit error:", err);
+        setErrorMsg(`Failed to submit: ${err.message}`);
+        return;
+      }
+    } else {
+      const updatedReports = [newReport, ...reports];
+      localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
+      setReports(updatedReports);
+      setSuccessMsg('Issue submitted successfully!');
+    }
 
     // Reset Form
     setTitle('');
@@ -743,22 +803,17 @@ export default function CitizenDashboard() {
                     <div style={{ position: 'absolute', top: '150px', left: '220px', width: '6px', height: '6px', backgroundColor: '#fff', borderRadius: '50%' }} />
 
                     {/* Interactive pins */}
-                    {[
-                      { id: 'Ward 12', label: 'Ward 12 (Beach Road)', top: '110px', left: '50px' },
-                      { id: 'Ward 4', label: 'Ward 4 (Mananchira)', top: '80px', left: '180px' },
-                      { id: 'Ward 18', label: 'Ward 18 (Palayam)', top: '190px', left: '130px' },
-                      { id: 'Ward 9', label: 'Ward 9 (West Hill)', top: '50px', left: '90px' }
-                    ].map(pin => {
-                      const isActive = ward === pin.id;
+                    {wardsList.map(w => {
+                      const isActive = ward === w.id;
                       return (
                         <button
-                          key={pin.id}
+                          key={w.id}
                           type="button"
-                          onClick={() => setWard(pin.id)}
+                          onClick={() => setWard(w.id)}
                           style={{
                             position: 'absolute',
-                            top: pin.top,
-                            left: pin.left,
+                            top: w.top,
+                            left: w.left,
                             background: 'transparent',
                             border: 'none',
                             cursor: 'pointer',
@@ -769,7 +824,7 @@ export default function CitizenDashboard() {
                             transform: isActive ? 'scale(1.15)' : 'scale(1)',
                             transition: 'transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)'
                           }}
-                          title={pin.label}
+                          title={`${w.id} (${w.name})`}
                         >
                           <FaMapMarkerAlt 
                             style={{ 
@@ -809,7 +864,10 @@ export default function CitizenDashboard() {
                   <div style={{ padding: '16px', borderRadius: 'var(--radius-lg)', background: 'var(--color-surface-container-low)', border: '1px solid var(--color-outline-variant)' }}>
                     <p className="label-sm" style={{ color: 'var(--color-outline)', margin: 0 }}>SELECTED LOCATION WARD</p>
                     <p className="body-md font-bold" style={{ margin: '4px 0 0 0', color: 'var(--color-primary)' }}>
-                      {ward === 'Ward 12' ? 'Ward 12 (Beach Road)' : ward === 'Ward 4' ? 'Ward 4 (Mananchira)' : ward === 'Ward 18' ? 'Ward 18 (Palayam)' : 'Ward 9 (West Hill)'}
+                      {(() => {
+                        const w = wardsList.find(x => x.id === ward);
+                        return w ? `${w.id} (${w.name})` : ward;
+                      })()}
                     </p>
                   </div>
 
@@ -938,10 +996,9 @@ export default function CitizenDashboard() {
                       style={{ height: '40px', minHeight: '40px', padding: '0 12px' }}
                     >
                       <option value="All">All Wards</option>
-                      <option value="Ward 12">Ward 12 (Beach Road)</option>
-                      <option value="Ward 4">Ward 4 (Mananchira)</option>
-                      <option value="Ward 18">Ward 18 (Palayam)</option>
-                      <option value="Ward 9">Ward 9 (West Hill)</option>
+                      {wardsList.map(w => (
+                        <option key={w.id} value={w.id}>{w.id} ({w.name})</option>
+                      ))}
                     </select>
                   </div>
 

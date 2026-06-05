@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { FaBars, FaTimes, FaExclamationTriangle, FaUserCircle, FaSignOutAlt } from 'react-icons/fa';
+import { isFirebaseEnabled } from '../../lib/firebase';
 
 function Header() {
  
@@ -71,14 +72,37 @@ function Header() {
   };
 
   return (
-    <header 
-      className="header-container header-glass"
-      style={{
-        opacity: mounted ? 1 : 0,
-        transform: mounted ? 'translateY(0)' : 'translateY(-20px)',
-        transition: 'opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
-      }}
-    >
+    <>
+      {!isFirebaseEnabled && (
+        <div 
+          style={{
+            background: 'linear-gradient(90deg, #ba1a1a 0%, #ff5449 100%)',
+            color: '#ffffff',
+            padding: '8px 16px',
+            fontSize: '0.85rem',
+            textAlign: 'center',
+            fontWeight: 600,
+            letterSpacing: '0.02em',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+            zIndex: 9999,
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
+          }}
+        >
+          <span>⚠️ <strong>Local Simulation Mode</strong>: No Firebase credentials found. Running with localStorage. Configure <code>.env.local</code> to connect a live database.</span>
+        </div>
+      )}
+      <header 
+        className="header-container header-glass"
+        style={{
+          opacity: mounted ? 1 : 0,
+          transform: mounted ? 'translateY(0)' : 'translateY(-20px)',
+          transition: 'opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
+      >
       <Link href="/" style={{ textDecoration: 'none' }}>
         <div 
           ref={logoRef}
@@ -322,6 +346,7 @@ function Header() {
         </div>
       </div>
     </header>
+    </>
   );
 }
 

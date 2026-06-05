@@ -1,8 +1,11 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { FaRoad, FaTint, FaLightbulb, FaTrash, FaMapMarkerAlt, FaFileUpload, FaTimes, FaCheckCircle } from 'react-icons/fa';
+import { db, isFirebaseEnabled } from '../../../../lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { DEFAULT_WARDS, Ward } from '../../../../lib/wards';
 
 interface ReportIssueFormProps {
   userName: string;
@@ -22,14 +25,8 @@ const CATEGORIES = [
   { id: 'Sanitation', label: 'Waste / Sanitation', icon: <FaTrash size={20} /> },
 ];
 
-const WARD_PINS = [
-  { id: 'Ward 12', label: 'Ward 12 (Beach Road)', top: '110px', left: '50px' },
-  { id: 'Ward 4', label: 'Ward 4 (Mananchira)', top: '80px', left: '180px' },
-  { id: 'Ward 18', label: 'Ward 18 (Palayam)', top: '190px', left: '130px' },
-  { id: 'Ward 9', label: 'Ward 9 (West Hill)', top: '50px', left: '90px' },
-];
-
 export default function ReportIssueForm({ userName, defaultWard, onSubmit }: ReportIssueFormProps) {
+  const [wardsList, setWardsList] = useState<Ward[]>(DEFAULT_WARDS);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Roads');
   const [ward, setWard] = useState(defaultWard);
@@ -38,6 +35,29 @@ export default function ReportIssueForm({ userName, defaultWard, onSubmit }: Rep
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (isFirebaseEnabled) {
+      const unsubscribe = onSnapshot(collection(db, 'wards'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: Ward[] = [];
+          snapshot.forEach((doc) => {
+            list.push(doc.data() as Ward);
+          });
+          list.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+          setWardsList(list);
+        }
+      }, (err) => {
+        console.error("Failed to fetch wards in ReportIssueForm:", err);
+      });
+      return () => unsubscribe();
+    } else {
+      const storedWards = localStorage.getItem('nammude_wards');
+      if (storedWards) {
+        setWardsList(JSON.parse(storedWards));
+      }
+    }
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -68,8 +88,10 @@ export default function ReportIssueForm({ userName, defaultWard, onSubmit }: Rep
     setTimeout(() => setSuccessMsg(''), 1500);
   };
 
-  const wardLabel = (id: string) =>
-    WARD_PINS.find(p => p.id === id)?.label ?? id;
+  const wardLabel = (id: string) => {
+    const w = wardsList.find(p => p.id === id);
+    return w ? `${w.id} (${w.name})` : id;
+  };
 
   return (
     <div className="awwwards-bento-card col-span-4 stagger-fade-up" style={{ padding: 'var(--space-xl)' }}>
@@ -191,16 +213,16 @@ export default function ReportIssueForm({ userName, defaultWard, onSubmit }: Rep
             <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(circle, #c7decb 10%, transparent 11%)', backgroundSize: '20px 20px', opacity: 0.8 }} />
             <div style={{ position: 'absolute', top: '120px', left: '-50px', width: '300px', height: '40px', background: '#d5e6db', transform: 'rotate(-25deg)', borderRadius: '20px' }} />
             <div style={{ position: 'absolute', top: '40px', left: '160px', width: '40px', height: '260px', background: '#d5e6db', transform: 'rotate(15deg)', borderRadius: '20px' }} />
-            {WARD_PINS.map(pin => {
-              const isActive = ward === pin.id;
+            {wardsList.map(w => {
+              const isActive = ward === w.id;
               return (
                 <button
-                  key={pin.id}
+                  key={w.id}
                   type="button"
-                  id={`ward-pin-${pin.id.replace(' ', '-').toLowerCase()}`}
-                  onClick={() => setWard(pin.id)}
-                  title={pin.label}
-                  style={{ position: 'absolute', top: pin.top, left: pin.left, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 10, transform: isActive ? 'scale(1.15)' : 'scale(1)', transition: 'transform 0.2s ease' }}
+                  id={`ward-pin-${w.id.replace(' ', '-').toLowerCase()}`}
+                  onClick={() => setWard(w.id)}
+                  title={`${w.id} (${w.name})`}
+                  style={{ position: 'absolute', top: w.top, left: w.left, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 10, transform: isActive ? 'scale(1.15)' : 'scale(1)', transition: 'transform 0.2s ease' }}
                 >
                   <FaMapMarkerAlt style={{ color: isActive ? 'var(--color-primary)' : 'var(--color-outline)', fontSize: '28px', filter: isActive ? 'drop-shadow(0px 4px 10px rgba(53,37,205,0.45))' : 'none' }} />
                   {isActive && (

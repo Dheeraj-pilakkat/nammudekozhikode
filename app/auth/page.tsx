@@ -4,6 +4,9 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { FaUser, FaUserShield, FaArrowRight, FaSignInAlt, FaCheckCircle } from 'react-icons/fa';
+import { auth, db, isFirebaseEnabled } from '../lib/firebase';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
 
 export default function AuthPage() {
   const router = useRouter();
@@ -35,40 +38,33 @@ export default function AuthPage() {
     }
 
     // Load engineers database to support dynamic profiles login
-    const storedEngs = localStorage.getItem('nammude_engineers');
-    if (storedEngs) {
-      setEngineers(JSON.parse(storedEngs));
+    if (isFirebaseEnabled) {
+      const loadEngineers = async () => {
+        try {
+          const querySnapshot = await getDocs(collection(db, 'engineers'));
+          const engList: any[] = [];
+          querySnapshot.forEach((doc) => {
+            engList.push(doc.data());
+          });
+          setEngineers(engList);
+        } catch (e) {
+          console.error("Failed to load engineers from Firestore:", e);
+        }
+      };
+      loadEngineers();
     } else {
-      const defaultEngineers = [
-        { id: 'ENG-101', name: 'Ramesh K.', dept: 'Roads Dept', mobile: '+919876543210', email: 'ramesh.k@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
-        { id: 'ENG-102', name: 'Sunil V.', dept: 'Electrical Dept', mobile: '+919876543211', email: 'sunil.v@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
-        { id: 'ENG-103', name: 'Priya M.', dept: 'Water Dept', mobile: '+919876543212', email: 'priya.m@kozhikode.gov.in', password: 'engineer123', status: 'Available', hasAccess: true },
-        { id: 'ENG-104', name: 'Team Alpha', dept: 'Sanitation Crew', mobile: '+919876543213', email: 'alpha.sani@kozhikode.gov.in', password: 'engineer123', status: 'Busy', hasAccess: false }
-      ];
-      localStorage.setItem('nammude_engineers', JSON.stringify(defaultEngineers));
-      setEngineers(defaultEngineers);
+      const storedEngs = localStorage.getItem('nammude_engineers');
+      if (storedEngs) {
+        setEngineers(JSON.parse(storedEngs));
+      } else {
+        setEngineers([]);
+      }
     }
   }, [router]);
 
-  const handleQuickLogin = (role: 'citizen' | 'official') => {
-    const mockUser = {
-      role,
-      name: role === 'citizen' ? 'Devi Prasad' : 'Ramesh Kumar (Ward 12 Admin)',
-      email: role === 'citizen' ? 'citizen@kozhikode.in' : 'official@kozhikode.gov.in',
-      ward: role === 'citizen' ? 'Ward 12' : 'Corporation Office'
-    };
-    localStorage.setItem('nammude_user', JSON.stringify(mockUser));
-    
-    // Dispatch storage event to notify other components (like Header)
-    window.dispatchEvent(new Event('storage'));
-    
-    setSuccess(`Logged in successfully as ${mockUser.name}!`);
-    setTimeout(() => {
-      router.push('/dashboard');
-    }, 800);
-  };
 
-  const handleSubmit = (e: React.FormEvent) => {
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -78,11 +74,183 @@ export default function AuthPage() {
       return;
     }
 
-    // Check if logging in through Official tab with engineer email
+    // Mayor check (always available)
+    if (email.toLowerCase() === 'mayor@kozhikode.gov.in' && password === 'moyor123') {
+      const mayorUser = {
+        uid: 'mayor_uid',
+        name: 'Mayor of Kozhikode',
+        email: 'mayor@kozhikode.gov.in',
+        role: 'mayor',
+        ward: 'Corporation Head Office'
+      };
+      localStorage.setItem('nammude_user', JSON.stringify(mayorUser));
+      window.dispatchEvent(new Event('storage'));
+      setSuccess('Signed in successfully as Mayor of Kozhikode!');
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 800);
+      return;
+    }
+
+    if (isFirebaseEnabled) {
+      try {
+        // Check if logging in through Official tab with engineer or custom official email
+        if (activeTab === 'official') {
+          // 1. Check engineers
+          const qEng = query(collection(db, 'engineers'), where('email', '==', email.toLowerCase()));
+          const querySnapshotEng = await getDocs(qEng);
+          if (!querySnapshotEng.empty) {
+            const matchedEng = querySnapshotEng.docs[0].data();
+            const correctPassword = matchedEng.password || 'engineer123';
+            if (password !== correctPassword) {
+              setError('Invalid password for field engineer profile.');
+              return;
+            }
+            if (!matchedEng.hasAccess) {
+              setError('Access Denied: Your portal access has been revoked by officials.');
+              return;
+            }
+
+            const mockUser = {
+              role: 'engineer',
+              id: matchedEng.id,
+              name: matchedEng.name,
+              email: matchedEng.email,
+              dept: matchedEng.dept,
+              mobile: matchedEng.mobile
+            };
+
+            localStorage.setItem('nammude_user', JSON.stringify(mockUser));
+            window.dispatchEvent(new Event('storage'));
+            setSuccess(`Signed in successfully as Field Engineer ${matchedEng.name}!`);
+            setTimeout(() => {
+              router.push('/dashboard');
+            }, 800);
+            return;
+          }
+
+          // 2. Check officials created by Mayor
+          const qOff = query(collection(db, 'users'), where('email', '==', email.toLowerCase()), where('role', '==', 'official'));
+          const querySnapshotOff = await getDocs(qOff);
+          if (!querySnapshotOff.empty) {
+            const matchedOfficial = querySnapshotOff.docs[0].data();
+            if (matchedOfficial.password !== undefined) {
+              if (matchedOfficial.hasAccess === false) {
+                setError('Access Denied: Your portal access has been revoked by the Mayor.');
+                return;
+              }
+              if (password !== matchedOfficial.password) {
+                setError('Invalid password for official profile.');
+                return;
+              }
+
+              const mockUser = {
+                role: 'official',
+                uid: matchedOfficial.uid || querySnapshotOff.docs[0].id,
+                name: matchedOfficial.name,
+                email: matchedOfficial.email,
+                ward: matchedOfficial.ward || 'Corporation Head Office'
+              };
+
+              localStorage.setItem('nammude_user', JSON.stringify(mockUser));
+              window.dispatchEvent(new Event('storage'));
+              setSuccess(`Signed in successfully as Corporation Official ${matchedOfficial.name}!`);
+              setTimeout(() => {
+                router.push('/dashboard');
+              }, 800);
+              return;
+            }
+          }
+        }
+
+        if (isRegister) {
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          const userProfile = {
+            uid: userCredential.user.uid,
+            name,
+            email,
+            role: activeTab,
+            ward: activeTab === 'citizen' ? 'Ward 12' : 'Corporation Head Office',
+            hasAccess: true
+          };
+          await setDoc(doc(db, 'users', userCredential.user.uid), userProfile);
+
+          localStorage.setItem('nammude_user', JSON.stringify(userProfile));
+          window.dispatchEvent(new Event('storage'));
+          setSuccess('Registered successfully!');
+          setTimeout(() => {
+            router.push('/dashboard');
+          }, 800);
+        } else {
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+          
+          let userProfile;
+          if (userDoc.exists()) {
+            userProfile = userDoc.data();
+            if (userProfile.role !== activeTab) {
+              setError(`Account found, but it is not registered as a ${activeTab === 'citizen' ? 'Citizen' : 'Corporation Official'}.`);
+              return;
+            }
+            if (userProfile.role === 'official' && userProfile.hasAccess === false) {
+              setError('Access Denied: Your portal access has been revoked by the Mayor.');
+              return;
+            }
+          } else {
+            userProfile = {
+              uid: userCredential.user.uid,
+              name: name || (activeTab === 'citizen' ? 'Kozhikode Citizen' : 'Corporation Official'),
+              email,
+              role: activeTab,
+              ward: activeTab === 'citizen' ? 'Ward 12' : 'Corporation Head Office',
+              hasAccess: true
+            };
+            await setDoc(doc(db, 'users', userCredential.user.uid), userProfile);
+          }
+
+          localStorage.setItem('nammude_user', JSON.stringify(userProfile));
+          window.dispatchEvent(new Event('storage'));
+          setSuccess('Signed in successfully!');
+          setTimeout(() => {
+            router.push('/dashboard');
+          }, 800);
+        }
+      } catch (err: any) {
+        console.error("Authentication failed:", err);
+        let userMessage = 'Authentication failed. Please try again.';
+        if (err.code) {
+          switch (err.code) {
+            case 'auth/email-already-in-use':
+              userMessage = 'This email address is already in use. Please try signing in instead.';
+              break;
+            case 'auth/weak-password':
+              userMessage = 'Password is too weak. It must be at least 6 characters.';
+              break;
+            case 'auth/invalid-email':
+              userMessage = 'Please enter a valid email address.';
+              break;
+            case 'auth/user-not-found':
+              userMessage = 'No account found with this email. Please register first.';
+              break;
+            case 'auth/wrong-password':
+            case 'auth/invalid-credential':
+              userMessage = 'Incorrect email address or password. Please try again.';
+              break;
+            default:
+              userMessage = err.message || userMessage;
+          }
+        } else {
+          userMessage = err.message || userMessage;
+        }
+        setError(userMessage);
+      }
+      return;
+    }
+
+    // Fallback: Simple simulated authentication
     if (activeTab === 'official') {
       const matchedEng = engineers.find(eng => eng.email.toLowerCase() === email.toLowerCase());
       if (matchedEng) {
-        // Match password (defaults to 'engineer123' for pre-existing accounts)
         const correctPassword = matchedEng.password || 'engineer123';
         if (password !== correctPassword) {
           setError('Invalid password for field engineer profile.');
@@ -112,9 +280,40 @@ export default function AuthPage() {
         }, 800);
         return;
       }
+
+      // Check if official created by Mayor in local fallback
+      const storedOfficials = localStorage.getItem('nammude_officials_list');
+      if (storedOfficials) {
+        const officialsList = JSON.parse(storedOfficials);
+        const matchedOfficial = officialsList.find((off: any) => off.email.toLowerCase() === email.toLowerCase());
+        if (matchedOfficial) {
+          if (matchedOfficial.hasAccess === false) {
+            setError('Access Denied: Your portal access has been revoked by the Mayor.');
+            return;
+          }
+          if (password !== matchedOfficial.password) {
+            setError('Invalid password for official profile.');
+            return;
+          }
+
+          const mockUser = {
+            role: 'official',
+            name: matchedOfficial.name,
+            email: matchedOfficial.email,
+            ward: matchedOfficial.ward
+          };
+
+          localStorage.setItem('nammude_user', JSON.stringify(mockUser));
+          window.dispatchEvent(new Event('storage'));
+          setSuccess(`Signed in successfully as Corporation Official ${matchedOfficial.name}!`);
+          setTimeout(() => {
+            router.push('/dashboard');
+          }, 800);
+          return;
+        }
+      }
     }
 
-    // Simple simulated authentication
     const mockUser = {
       role: activeTab,
       name: name || (activeTab === 'citizen' ? 'Kozhikode Citizen' : 'Corporation Official'),
@@ -367,30 +566,6 @@ export default function AuthPage() {
             </div>
           </form>
 
-          {/* Quick Login Section */}
-          <div style={{ marginTop: 'var(--space-md)', borderTop: '1px solid var(--color-outline-variant)', paddingTop: 'var(--space-md)' }}>
-            <p className="label-sm" style={{ color: 'var(--color-outline)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '12px' }}>
-              Quick testing actions
-            </p>
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <button 
-                onClick={() => handleQuickLogin('citizen')}
-                className="btn btn-outline btn-shimmer"
-                style={{ flex: 1, minWidth: '180px', minHeight: '44px', display: 'flex', gap: '8px', fontSize: '0.9rem' }}
-              >
-                <span>Login as Demo Citizen</span>
-                <FaArrowRight size={12} />
-              </button>
-              <button 
-                onClick={() => handleQuickLogin('official')}
-                className="btn btn-outline btn-shimmer"
-                style={{ flex: 1, minWidth: '180px', minHeight: '44px', display: 'flex', gap: '8px', fontSize: '0.9rem' }}
-              >
-                <span>Login as Demo Official</span>
-                <FaArrowRight size={12} />
-              </button>
-            </div>
-          </div>
 
         </div>
 

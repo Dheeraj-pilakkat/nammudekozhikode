@@ -1,13 +1,7 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "@/app/globals.css";
 import Header from "@/app/components/ui/Header";
 import Footer from "@/app/components/ui/Footer";
-
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Nammude Nagaram",
@@ -20,10 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${inter.variable}`}
-    >
+    <html lang="en">
       <body>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
           <Header/>

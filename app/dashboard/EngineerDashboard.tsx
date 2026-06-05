@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { FaHome, FaFileAlt, FaSignOutAlt, FaMapMarkerAlt, FaCalendarAlt, FaUser, FaCheck, FaExclamationTriangle, FaClock, FaCheckCircle, FaClipboardList, FaPlus, FaCog } from 'react-icons/fa';
+import { db, isFirebaseEnabled } from '../lib/firebase';
+import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
 interface Report {
   id: string;
@@ -60,27 +62,80 @@ export default function EngineerDashboard() {
       return;
     }
 
-    // Load engineers database to double-check active access
-    const storedEngs = localStorage.getItem('nammude_engineers');
-    if (storedEngs) {
-      const engsList = JSON.parse(storedEngs);
-      const currentEng = engsList.find((e: any) => e.id === parsedUser.id);
-      if (currentEng && !currentEng.hasAccess) {
-        // Revoked access
-        localStorage.removeItem('nammude_user');
-        router.push('/auth?error=revoked');
-        return;
-      }
-    }
-
     setEngineer(parsedUser);
 
-    // Load tickets database
-    const storedReports = localStorage.getItem('nammude_reports');
-    if (storedReports) {
-      setReports(JSON.parse(storedReports));
+    if (isFirebaseEnabled) {
+      const unsubEngineers = onSnapshot(doc(db, 'engineers', parsedUser.id), (docSnap) => {
+        if (docSnap.exists()) {
+          const currentEng = docSnap.data();
+          if (currentEng && !currentEng.hasAccess) {
+            localStorage.removeItem('nammude_user');
+            router.push('/auth?error=revoked');
+          }
+        }
+      }, (err) => {
+        console.error("Failed to fetch engineer details in real-time:", err);
+      });
+
+      const unsubReports = onSnapshot(collection(db, 'reports'), (snapshot) => {
+        const fetchedReports: Report[] = [];
+        snapshot.forEach((doc) => {
+          fetchedReports.push(doc.data() as Report);
+        });
+        setReports(fetchedReports);
+      }, (err) => {
+        console.error("Failed to load reports from Firestore:", err);
+      });
+
+      return () => {
+        unsubReports();
+        unsubEngineers();
+      };
+    } else {
+      // Load engineers database to double-check active access
+      const storedEngs = localStorage.getItem('nammude_engineers');
+      if (storedEngs) {
+        const engsList = JSON.parse(storedEngs);
+        const currentEng = engsList.find((e: any) => e.id === parsedUser.id);
+        if (currentEng && !currentEng.hasAccess) {
+          // Revoked access
+          localStorage.removeItem('nammude_user');
+          router.push('/auth?error=revoked');
+          return;
+        }
+      }
+
+      // Load tickets database
+      const storedReports = localStorage.getItem('nammude_reports');
+      if (storedReports) {
+        setReports(JSON.parse(storedReports));
+      }
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!mounted) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(e => {
+          if (e.isIntersecting) {
+            e.target.setAttribute('data-revealed', 'true');
+          }
+        });
+      },
+      { threshold: 0.01 }
+    );
+
+    const timer = setTimeout(() => {
+      document.querySelectorAll('.stagger-fade-up').forEach(el => observer.observe(el));
+    }, 50);
+
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [activeTab, mounted]);
 
   const handleLogout = () => {
     localStorage.removeItem('nammude_user');
@@ -93,47 +148,81 @@ export default function EngineerDashboard() {
   const activeTasks = assignedTasks.filter(t => t.status !== 'Resolved');
   const resolvedTasks = assignedTasks.filter(t => t.status === 'Resolved');
 
-  const handleUpdateStatus = (taskId: string, status: 'Pending' | 'In Progress' | 'Resolved') => {
-    const updatedReports = reports.map(r => {
-      if (r.id === taskId) {
-        return {
-          ...r,
-          status,
-          resolutionNotes: status === 'Resolved' || resolutionNotes ? resolutionNotes : r.resolutionNotes
-        };
+  const handleUpdateStatus = async (taskId: string, status: 'Pending' | 'In Progress' | 'Resolved') => {
+    if (isFirebaseEnabled) {
+      try {
+        const repRef = doc(db, 'reports', taskId);
+        const targetTask = reports.find(r => r.id === taskId);
+        if (targetTask) {
+          await setDoc(repRef, {
+            ...targetTask,
+            status,
+            resolutionNotes: status === 'Resolved' || resolutionNotes ? resolutionNotes : targetTask.resolutionNotes
+          });
+        }
+      } catch (err: any) {
+        console.error("Failed to update status in Firestore:", err);
       }
-      return r;
-    });
+    } else {
+      const updatedReports = reports.map(r => {
+        if (r.id === taskId) {
+          return {
+            ...r,
+            status,
+            resolutionNotes: status === 'Resolved' || resolutionNotes ? resolutionNotes : r.resolutionNotes
+          };
+        }
+        return r;
+      });
 
-    localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
-    setReports(updatedReports);
+      localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
+      setReports(updatedReports);
+    }
+    
     setSuccessMsg(`Task state updated to ${status}!`);
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleSubmitResolution = (e: React.FormEvent, taskId: string) => {
+  const handleSubmitResolution = async (e: React.FormEvent, taskId: string) => {
     e.preventDefault();
     if (!resolutionNotes) return;
     
-    const updatedReports = reports.map(r => {
-      if (r.id === taskId) {
-        return {
-          ...r,
-          status: 'Resolved' as const,
-          resolutionNotes
-        };
+    if (isFirebaseEnabled) {
+      try {
+        const repRef = doc(db, 'reports', taskId);
+        const targetTask = reports.find(r => r.id === taskId);
+        if (targetTask) {
+          await setDoc(repRef, {
+            ...targetTask,
+            status: 'Resolved' as const,
+            resolutionNotes
+          });
+        }
+      } catch (err) {
+        console.error("Failed to resolve task in Firestore:", err);
       }
-      return r;
-    });
+    } else {
+      const updatedReports = reports.map(r => {
+        if (r.id === taskId) {
+          return {
+            ...r,
+            status: 'Resolved' as const,
+            resolutionNotes
+          };
+        }
+        return r;
+      });
 
-    localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
-    setReports(updatedReports);
+      localStorage.setItem('nammude_reports', JSON.stringify(updatedReports));
+      setReports(updatedReports);
+    }
+    
     setResolutionNotes('');
     setSuccessMsg('Task resolved and notes logged!');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setSettingsError('');
     setSettingsSuccess('');
@@ -148,31 +237,52 @@ export default function EngineerDashboard() {
       return;
     }
 
-    const storedEngs = localStorage.getItem('nammude_engineers');
-    if (!storedEngs) {
-      setSettingsError('Engineer database not found.');
-      return;
+    if (isFirebaseEnabled) {
+      try {
+        const engRef = doc(db, 'engineers', engineer.id);
+        const { getDoc } = await import('firebase/firestore');
+        const engDoc = await getDoc(engRef);
+        if (!engDoc.exists()) {
+          setSettingsError('Engineer profile not found in database.');
+          return;
+        }
+        const currentEng = engDoc.data();
+        const correctOldPassword = currentEng.password || 'engineer123';
+        if (oldPassword !== correctOldPassword) {
+          setSettingsError('Incorrect current password.');
+          return;
+        }
+        await setDoc(engRef, { ...currentEng, password: newPassword });
+      } catch (err: any) {
+        console.error("Failed to update password in Firestore:", err);
+        setSettingsError(`Failed to update password: ${err.message}`);
+        return;
+      }
+    } else {
+      const storedEngs = localStorage.getItem('nammude_engineers');
+      if (!storedEngs) {
+        setSettingsError('Engineer database not found.');
+        return;
+      }
+
+      const engsList = JSON.parse(storedEngs);
+      const engIndex = engsList.findIndex((e: any) => e.id === engineer.id);
+      if (engIndex === -1) {
+        setSettingsError('Engineer profile not found.');
+        return;
+      }
+
+      const currentEng = engsList[engIndex];
+      const correctOldPassword = currentEng.password || 'engineer123';
+      if (oldPassword !== correctOldPassword) {
+        setSettingsError('Incorrect current password.');
+        return;
+      }
+
+      engsList[engIndex].password = newPassword;
+      localStorage.setItem('nammude_engineers', JSON.stringify(engsList));
     }
 
-    const engsList = JSON.parse(storedEngs);
-    const engIndex = engsList.findIndex((e: any) => e.id === engineer.id);
-    if (engIndex === -1) {
-      setSettingsError('Engineer profile not found.');
-      return;
-    }
-
-    const currentEng = engsList[engIndex];
-    const correctOldPassword = currentEng.password || 'engineer123';
-    if (oldPassword !== correctOldPassword) {
-      setSettingsError('Incorrect current password.');
-      return;
-    }
-
-    // Update password in db
-    engsList[engIndex].password = newPassword;
-    localStorage.setItem('nammude_engineers', JSON.stringify(engsList));
-
-    // Reset inputs
     setOldPassword('');
     setNewPassword('');
     setConfirmPassword('');

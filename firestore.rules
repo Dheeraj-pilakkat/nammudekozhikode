@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // OPTION 1: PERMISSIVE RULES FOR DEVELOPMENT & TESTING (Recommended for immediate fix)
+    // Copy/paste this into your Firebase Console -> Firestore Database -> Rules tab:
+    match /{document=**} {
+      allow read, write: if true;
+    }
+
+    /*
+    // OPTION 2: SECURED PRODUCTION RULES
+    // Copy/paste this to enforce role-based client-side constraints:
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Reports Collection
+    match /reports/{reportId} {
+      allow read: if true; // Anyone can view open civic issues
+      allow write: if true; // Anyone can file issues or update status
+    }
+    
+    // Engineers Collection
+    match /engineers/{engineerId} {
+      allow read: if true; // Needed to match login credentials
+      allow write: if request.auth != null; // Only logged-in officials can manage crew
+    }
+    */
+  }
+}
