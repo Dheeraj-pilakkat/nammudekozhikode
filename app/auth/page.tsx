@@ -15,6 +15,7 @@ export default function AuthPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [mounted, setMounted] = useState(false);
+  const [engineers, setEngineers] = useState<any[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -22,6 +23,30 @@ export default function AuthPage() {
     const user = localStorage.getItem('nammude_user');
     if (user) {
       router.push('/dashboard');
+      return;
+    }
+
+    // Check query param for revoked error
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('error') === 'revoked') {
+        setError('Access Denied: Your portal access has been revoked by officials.');
+      }
+    }
+
+    // Load engineers database to support dynamic profiles login
+    const storedEngs = localStorage.getItem('nammude_engineers');
+    if (storedEngs) {
+      setEngineers(JSON.parse(storedEngs));
+    } else {
+      const defaultEngineers = [
+        { id: 'ENG-101', name: 'Ramesh K.', dept: 'Roads Dept', mobile: '+919876543210', email: 'ramesh.k@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
+        { id: 'ENG-102', name: 'Sunil V.', dept: 'Electrical Dept', mobile: '+919876543211', email: 'sunil.v@kozhikode.gov.in', password: 'engineer123', status: 'On Duty', hasAccess: true },
+        { id: 'ENG-103', name: 'Priya M.', dept: 'Water Dept', mobile: '+919876543212', email: 'priya.m@kozhikode.gov.in', password: 'engineer123', status: 'Available', hasAccess: true },
+        { id: 'ENG-104', name: 'Team Alpha', dept: 'Sanitation Crew', mobile: '+919876543213', email: 'alpha.sani@kozhikode.gov.in', password: 'engineer123', status: 'Busy', hasAccess: false }
+      ];
+      localStorage.setItem('nammude_engineers', JSON.stringify(defaultEngineers));
+      setEngineers(defaultEngineers);
     }
   }, [router]);
 
@@ -30,7 +55,7 @@ export default function AuthPage() {
       role,
       name: role === 'citizen' ? 'Devi Prasad' : 'Ramesh Kumar (Ward 12 Admin)',
       email: role === 'citizen' ? 'citizen@kozhikode.in' : 'official@kozhikode.gov.in',
-      ward: role === 'citizen' ? 'Ward 12' : 'Ward 12 Corporation Office'
+      ward: role === 'citizen' ? 'Ward 12' : 'Corporation Office'
     };
     localStorage.setItem('nammude_user', JSON.stringify(mockUser));
     
@@ -53,8 +78,43 @@ export default function AuthPage() {
       return;
     }
 
+    // Check if logging in through Official tab with engineer email
+    if (activeTab === 'official') {
+      const matchedEng = engineers.find(eng => eng.email.toLowerCase() === email.toLowerCase());
+      if (matchedEng) {
+        // Match password (defaults to 'engineer123' for pre-existing accounts)
+        const correctPassword = matchedEng.password || 'engineer123';
+        if (password !== correctPassword) {
+          setError('Invalid password for field engineer profile.');
+          return;
+        }
+
+        if (!matchedEng.hasAccess) {
+          setError('Access Denied: Your portal access has been revoked by officials.');
+          return;
+        }
+
+        const mockUser = {
+          role: 'engineer',
+          id: matchedEng.id,
+          name: matchedEng.name,
+          email: matchedEng.email,
+          dept: matchedEng.dept,
+          mobile: matchedEng.mobile
+        };
+
+        localStorage.setItem('nammude_user', JSON.stringify(mockUser));
+        window.dispatchEvent(new Event('storage'));
+
+        setSuccess(`Signed in successfully as Field Engineer ${matchedEng.name}!`);
+        setTimeout(() => {
+          router.push('/dashboard');
+        }, 800);
+        return;
+      }
+    }
+
     // Simple simulated authentication
-    const roleName = activeTab === 'citizen' ? 'Citizen' : 'Official';
     const mockUser = {
       role: activeTab,
       name: name || (activeTab === 'citizen' ? 'Kozhikode Citizen' : 'Corporation Official'),
@@ -170,7 +230,7 @@ export default function AuthPage() {
               background: 'var(--color-surface-container-low)', 
               borderRadius: 'var(--radius-full)', 
               padding: '6px',
-              maxWidth: '350px',
+              maxWidth: '320px',
               border: '1px solid var(--color-outline-variant)'
             }}
           >

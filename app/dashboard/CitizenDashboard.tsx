@@ -15,6 +15,7 @@ interface Report {
   reporter: string;
   ward: string;
   description: string;
+  resolutionNotes?: string;
 }
 
 export default function CitizenDashboard() {
@@ -228,8 +229,8 @@ export default function CitizenDashboard() {
       <div id="scroll-progress" className="scroll-progress-bar"></div>
       
       <div style={{
-        maxWidth: '1400px', 
-        margin: '0 auto', 
+        width: '100%',
+        maxWidth: '100%', 
         padding: 'var(--space-md)',
         display: 'grid',
         gridTemplateColumns: isSidebarOpen ? '250px 1fr' : '88px 1fr',
@@ -326,7 +327,7 @@ export default function CitizenDashboard() {
         </aside>
 
         {/* Main Content Area */}
-        <main className="awwwards-bento-grid" style={{ padding: '0' }}>
+        <main className="awwwards-bento-grid" style={{ padding: '0', maxWidth: '100%', width: '100%' }}>
           
           {/* Top Header - Hero Block */}
           <header className="awwwards-bento-card col-span-4 glass-lite" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-md) var(--space-xl)', position: 'relative' }}>
@@ -529,6 +530,30 @@ export default function CitizenDashboard() {
 
                         </div>
                       </div>
+
+                      {report.status === 'Resolved' && report.resolutionNotes && (
+                        <div 
+                          style={{
+                            marginTop: '16px',
+                            padding: '12px 16px',
+                            backgroundColor: 'var(--color-secondary-container)',
+                            color: 'var(--color-on-secondary-container)',
+                            borderRadius: 'var(--radius-default)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            border: '1px solid rgba(0, 108, 73, 0.15)'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px' }}>
+                            <FaCheckCircle size={14} style={{ color: 'var(--color-on-secondary-container)' }} />
+                            <span>Resolution Notes from Engineer</span>
+                          </div>
+                          <p className="body-sm" style={{ margin: 0, opacity: 0.95, lineHeight: 1.5 }}>
+                            {report.resolutionNotes}
+                          </p>
+                        </div>
+                      )}
 
                     </div>
                   ))}

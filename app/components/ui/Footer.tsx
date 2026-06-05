@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import React, { useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { FaFacebook, FaTwitter, FaInstagram, FaCheckCircle, FaExclamationTriangle, FaMapMarkerAlt } from 'react-icons/fa';
 
 function Footer() {
