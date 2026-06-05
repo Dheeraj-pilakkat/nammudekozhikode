@@ -7,6 +7,7 @@ import { FaHome, FaFileAlt, FaHardHat, FaCog, FaBell, FaSearch, FaCheckCircle, F
 import { db, isFirebaseEnabled } from '../lib/firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { DEFAULT_WARDS, generateRandomCoords, Ward } from '../lib/wards';
+import { AppNotification } from '../lib/notifications';
 
 interface Report {
   id: string;
@@ -79,12 +80,25 @@ export default function OfficialDashboard() {
   const [analyticsMonth, setAnalyticsMonth] = useState('All Months');
 
   // Notifications List
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifContent, setNotifContent] = useState('');
+  const [readNotifIds, setReadNotifIds] = useState<string[]>([]);
+  const [deletedNotifIds, setDeletedNotifIds] = useState<string[]>([]);
+  const [notifSuccessMsg, setNotifSuccessMsg] = useState('');
+  const [notifErrorMsg, setNotifErrorMsg] = useState('');
 
   const defaultReports: Report[] = [];
 
   useEffect(() => {
     setMounted(true);
+    
+    // Load read/deleted notification states from localStorage on mount
+    const storedRead = localStorage.getItem('nammude_read_notifications');
+    if (storedRead) setReadNotifIds(JSON.parse(storedRead));
+    const storedDeleted = localStorage.getItem('nammude_deleted_notifications');
+    if (storedDeleted) setDeletedNotifIds(JSON.parse(storedDeleted));
+
     const storedUser = localStorage.getItem('nammude_user');
     if (!storedUser) {
       router.push('/auth');
@@ -151,11 +165,23 @@ export default function OfficialDashboard() {
         console.error("Failed to load wards from Firestore:", err);
       });
 
+      const unsubNotifs = onSnapshot(collection(db, 'notifications'), (snapshot) => {
+        const list: AppNotification[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as AppNotification);
+        });
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        setNotificationsList(list);
+      }, (err) => {
+        console.error("Failed to load notifications from Firestore:", err);
+      });
+
       return () => {
         unsubReports();
         unsubEngineers();
         unsubAccess();
         unsubWards();
+        unsubNotifs();
       };
     } else {
       // Local fallback access check
@@ -193,6 +219,13 @@ export default function OfficialDashboard() {
       } else {
         localStorage.setItem('nammude_wards', JSON.stringify(DEFAULT_WARDS));
         setWardsList(DEFAULT_WARDS);
+      }
+
+      const storedNotifs = localStorage.getItem('nammude_notifications');
+      if (storedNotifs) {
+        setNotificationsList(JSON.parse(storedNotifs));
+      } else {
+        setNotificationsList([]);
       }
     }
   }, [router]);
@@ -247,23 +280,110 @@ export default function OfficialDashboard() {
       setAllReports(updated);
     }
     
-    // Add Notification
-    const newNotif = {
-      id: Date.now(),
-      type: status === 'Resolved' ? 'success' as const : 'info' as const,
+    // Add Notification to dynamic broadcast
+    const notificationId = `NOTIF-${Math.floor(1000 + Math.random() * 9000)}`;
+    const systemNotif: AppNotification = {
+      id: notificationId,
       title: `${assignee} updated ticket`,
-      boldText: `#${id}`,
-      suffix: `to ${status}.`,
-      time: 'Just now',
-      read: false
+      content: `Ticket #${id} status updated to ${status}.`,
+      target: 'officials',
+      sender: assignee,
+      senderRole: 'official',
+      date: new Date().toISOString(),
+      status: 'approved'
     };
-    setNotifications([newNotif, ...notifications]);
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'notifications', notificationId), systemNotif);
+      } catch (err) {
+        console.error("Failed to post system notification:", err);
+      }
+    } else {
+      const stored = localStorage.getItem('nammude_notifications');
+      const list = stored ? JSON.parse(stored) : [];
+      const updated = [systemNotif, ...list];
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+    }
   };
 
-  const markAllAsRead = () => setNotifications(notifications.map(n => ({ ...n, read: true })));
-  const deleteAllNotifications = () => setNotifications([]);
-  const markAsRead = (id: number) => setNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
-  const deleteNotification = (id: number) => setNotifications(notifications.filter(n => n.id !== id));
+  const inboxNotifications = notificationsList
+    .filter(n => n.status === 'approved' && (n.target === 'officials' || n.target === 'all'))
+    .filter(n => !deletedNotifIds.includes(n.id))
+    .map(n => ({
+      id: n.id,
+      title: n.title,
+      boldText: '',
+      suffix: n.content,
+      time: new Date(n.date).toLocaleString(),
+      read: readNotifIds.includes(n.id)
+    }));
+
+  const markAllAsRead = () => {
+    const activeIds = inboxNotifications.map(n => n.id);
+    const newRead = Array.from(new Set([...readNotifIds, ...activeIds]));
+    setReadNotifIds(newRead);
+    localStorage.setItem('nammude_read_notifications', JSON.stringify(newRead));
+  };
+
+  const deleteAllNotifications = () => {
+    const activeIds = inboxNotifications.map(n => n.id);
+    const newDeleted = Array.from(new Set([...deletedNotifIds, ...activeIds]));
+    setDeletedNotifIds(newDeleted);
+    localStorage.setItem('nammude_deleted_notifications', JSON.stringify(newDeleted));
+  };
+
+  const markAsRead = (id: string | number) => {
+    const stringId = String(id);
+    const newRead = Array.from(new Set([...readNotifIds, stringId]));
+    setReadNotifIds(newRead);
+    localStorage.setItem('nammude_read_notifications', JSON.stringify(newRead));
+  };
+
+  const deleteNotification = (id: string | number) => {
+    const stringId = String(id);
+    const newDeleted = Array.from(new Set([...deletedNotifIds, stringId]));
+    setDeletedNotifIds(newDeleted);
+    localStorage.setItem('nammude_deleted_notifications', JSON.stringify(newDeleted));
+  };
+
+  const handleRequestNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotifSuccessMsg('');
+    setNotifErrorMsg('');
+    if (!notifTitle.trim() || !notifContent.trim()) {
+      setNotifErrorMsg('Please fill in both title and content.');
+      return;
+    }
+    const newRequest: AppNotification = {
+      id: `NOTIF-${Math.floor(1000 + Math.random() * 9000)}`,
+      title: notifTitle,
+      content: notifContent,
+      target: 'citizens',
+      sender: user?.name || 'Ward Official',
+      senderRole: 'official',
+      date: new Date().toISOString(),
+      status: 'pending',
+      requestedBy: user?.email,
+      requestedAt: new Date().toISOString()
+    };
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'notifications', newRequest.id), newRequest);
+        setNotifSuccessMsg('Notification request submitted to Mayor for approval!');
+      } catch (err: any) {
+        console.error("Firestore submit request error:", err);
+        setNotifErrorMsg(`Failed to submit: ${err.message}`);
+        return;
+      }
+    } else {
+      const updated = [newRequest, ...notificationsList];
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+      setNotifSuccessMsg('Notification request submitted to Mayor for approval!');
+    }
+    setNotifTitle('');
+    setNotifContent('');
 
   // Filter reports
   const filteredReports = reports.filter(report => {
@@ -629,8 +749,8 @@ export default function OfficialDashboard() {
 
           <nav style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
             {(user?.ward === 'Corporation Head Office'
-              ? ['Overview', 'Reports Manager', 'Engineers', 'Analytics', 'Manage Wards']
-              : ['Overview', 'Reports Manager', 'Engineers', 'Analytics']
+              ? ['Overview', 'Reports Manager', 'Engineers', 'Analytics', 'Manage Wards', 'Notifications']
+              : ['Overview', 'Reports Manager', 'Engineers', 'Analytics', 'Notifications']
             ).map(tab => (
               <button 
                 key={tab}
@@ -655,6 +775,7 @@ export default function OfficialDashboard() {
                 {tab === 'Engineers' && <FaHardHat style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {tab === 'Analytics' && <FaChartBar style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {tab === 'Manage Wards' && <FaMapMarkerAlt style={{ fontSize: '20px', minWidth: '20px' }} />}
+                {tab === 'Notifications' && <FaBell style={{ fontSize: '20px', minWidth: '20px' }} />}
                 {isSidebarOpen && <span style={{ whiteSpace: 'nowrap' }}>{tab}</span>}
               </button>
             ))}
@@ -719,7 +840,7 @@ export default function OfficialDashboard() {
                   style={{ background: 'none', border: 'none', position: 'relative', cursor: 'pointer', padding: '8px' }}
                 >
                   <FaBell style={{ fontSize: '20px', color: 'var(--color-on-surface-variant)' }} />
-                  {notifications.some(n => !n.read) && (
+                  {inboxNotifications.some(n => !n.read) && (
                     <span style={{ position: 'absolute', top: '4px', right: '4px', width: '10px', height: '10px', backgroundColor: 'var(--color-error)', borderRadius: '50%' }}></span>
                   )}
                 </button>
@@ -741,12 +862,12 @@ export default function OfficialDashboard() {
                       </div>
                     </div>
                     <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                      {notifications.length === 0 ? (
+                      {inboxNotifications.length === 0 ? (
                         <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--color-outline)' }}>
                           <p className="body-sm">No new notifications</p>
                         </div>
                       ) : (
-                        notifications.map(n => (
+                        inboxNotifications.map(n => (
                           <div key={n.id} style={{ 
                             padding: 'var(--space-md)', 
                             borderBottom: '1px solid var(--color-outline-variant)', 
@@ -1761,8 +1882,201 @@ export default function OfficialDashboard() {
             </div>
           )}
 
+          {/* Tab View: Notifications */}
+          {activeTab === 'Notifications' && (
+            <div className="col-span-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '24px' }}>
+              
+              {/* Proposal Request Form */}
+              <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)', height: 'fit-content' }}>
+                <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Request Citizen Broadcast</h3>
+                <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                  Draft a public safety announcement or warning for Citizens. Submissions will be sent to the Mayor for permission.
+                </p>
+
+                {notifErrorMsg && (
+                  <div style={{ padding: '10px 14px', backgroundColor: 'var(--color-error-container)', color: 'var(--color-on-error-container)', borderRadius: 'var(--radius-default)', fontSize: '13px', fontWeight: 600, marginBottom: '16px' }}>
+                    {notifErrorMsg}
+                  </div>
+                )}
+
+                {notifSuccessMsg && (
+                  <div style={{ padding: '10px 14px', backgroundColor: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)', borderRadius: 'var(--radius-default)', fontSize: '13px', fontWeight: 600, marginBottom: '16px' }}>
+                    {notifSuccessMsg}
+                  </div>
+                )}
+
+                <form onSubmit={handleRequestNotification} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Proposal Title</label>
+                    <input 
+                      type="text" 
+                      className="input-field" 
+                      placeholder="e.g. Roads Blocked at Beach Road" 
+                      value={notifTitle}
+                      onChange={e => setNotifTitle(e.target.value)}
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-lowest)' }}
+                    />
+                  </div>
+
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Message Details</label>
+                    <textarea 
+                      className="input-field" 
+                      placeholder="Explain the alert, event, or warning clearly..." 
+                      value={notifContent}
+                      onChange={e => setNotifContent(e.target.value)}
+                      rows={5}
+                      style={{ padding: '10px 12px', fontSize: '13px', background: 'var(--color-surface-container-lowest)', fontFamily: 'inherit' }}
+                    />
+                  </div>
+
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Recipient Target</label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      value="Citizens Only"
+                      disabled
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-low)' }}
+                    />
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    className="btn btn-primary btn-glow"
+                    style={{ borderRadius: 'var(--radius-full)', minHeight: '42px', fontSize: '13px', fontWeight: 700, marginTop: '8px', padding: '0 24px', alignSelf: 'flex-start' }}
+                  >
+                    Submit Proposal
+                  </button>
+                </form>
+              </div>
+
+              {/* Proposals and Inbox List Panels */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                
+                {/* My Requests Tracker */}
+                <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)' }}>
+                  <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>My Broadcast Proposals</h3>
+                  <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                    Track permission logs for your citizen notification requests.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                    {notificationsList.filter(n => n.requestedBy === user?.email).length === 0 ? (
+                      <p className="body-sm" style={{ color: 'var(--color-outline)', textAlign: 'center', padding: '24px 0' }}>You haven't requested any broadcasts yet.</p>
+                    ) : (
+                      notificationsList.filter(n => n.requestedBy === user?.email).map(n => (
+                        <div 
+                          key={n.id}
+                          style={{
+                            padding: '16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-outline-variant)',
+                            background: 'var(--color-surface-container-lowest)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <h4 className="label-lg" style={{ fontWeight: 800 }}>{n.title}</h4>
+                              <p className="label-sm" style={{ color: 'var(--color-outline)', marginTop: '2px' }}>
+                                Requested: {new Date(n.requestedAt || n.date).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <span className={`chip ${n.status === 'approved' ? 'chip-resolved' : n.status === 'denied' ? 'chip-pending' : ''}`} style={{ fontSize: '10px', background: n.status === 'pending' ? 'rgba(230,162,44,0.1)' : undefined, color: n.status === 'pending' ? '#e6a23c' : undefined }}>
+                              {n.status === 'approved' ? 'Approved & Published' : n.status === 'denied' ? 'Denied' : 'Pending Review'}
+                            </span>
+                          </div>
+                          <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>{n.content}</p>
+                          {n.approvedAt && (
+                            <p className="label-sm" style={{ color: 'var(--color-primary)', fontWeight: 600, borderTop: '1px solid var(--color-outline-variant)', paddingTop: '6px' }}>
+                              ✅ Approved by Mayor on {new Date(n.approvedAt).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Bulletin Inbox */}
+                <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)' }}>
+                  <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Official Bulletin Feed</h3>
+                  <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                    Read official notices issued by the Mayor for all Corporation Officials.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
+                    {inboxNotifications.length === 0 ? (
+                      <p className="body-sm" style={{ color: 'var(--color-outline)', textAlign: 'center', padding: '24px 0' }}>No active bulletin notifications.</p>
+                    ) : (
+                      inboxNotifications.map(n => (
+                        <div 
+                          key={n.id}
+                          style={{
+                            padding: '16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-outline-variant)',
+                            background: 'var(--color-surface-container-lowest)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: '12px',
+                            backgroundColor: n.read ? 'var(--color-surface-container-lowest)' : 'rgba(53, 37, 205, 0.04)'
+                          }}
+                        >
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                              {!n.read && <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--color-primary)' }} />}
+                              <h4 className="label-lg" style={{ fontWeight: n.read ? 700 : 800 }}>{n.title}</h4>
+                            </div>
+                            <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>{n.suffix}</p>
+                            <p className="label-sm" style={{ color: 'var(--color-outline)', marginTop: '8px' }}>
+                              Received: {n.time}
+                            </p>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            {!n.read && (
+                              <button
+                                onClick={() => markAsRead(n.id)}
+                                style={{
+                                  padding: '6px', borderRadius: '50%', border: 'none',
+                                  cursor: 'pointer', background: 'rgba(53, 37, 205, 0.1)', color: 'var(--color-primary)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                }}
+                                title="Mark as read"
+                              >
+                                <FaCheck size={10} />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => deleteNotification(n.id)}
+                              style={{
+                                  padding: '6px', borderRadius: '50%', border: 'none',
+                                  cursor: 'pointer', background: 'rgba(186, 26, 26, 0.1)', color: 'var(--color-error)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                }}
+                              title="Delete notification"
+                            >
+                              <FaTrash size={10} />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
         </main>
       </div>
     </div>
   );
+}
 }

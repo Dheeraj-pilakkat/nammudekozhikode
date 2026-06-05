@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FaUserShield, FaSignOutAlt, FaMapMarkerAlt, FaCheckCircle, FaExclamationTriangle, FaClock, FaClipboardList, FaPlus, FaCog, FaUser, FaUserCheck, FaUserTimes, FaBuilding, FaSpinner, FaTrash } from 'react-icons/fa';
+import { FaUserShield, FaSignOutAlt, FaMapMarkerAlt, FaCheckCircle, FaExclamationTriangle, FaClock, FaClipboardList, FaPlus, FaCog, FaUser, FaUserCheck, FaUserTimes, FaBuilding, FaSpinner, FaTrash, FaBell, FaCheck, FaTimes } from 'react-icons/fa';
 import { db, isFirebaseEnabled } from '../lib/firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { DEFAULT_WARDS, generateRandomCoords, Ward } from '../lib/wards';
+import { AppNotification } from '../lib/notifications';
 
 interface Report {
   id: string;
@@ -39,6 +40,12 @@ export default function MayorDashboard() {
   const [mounted, setMounted] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Notifications State
+  const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifContent, setNotifContent] = useState('');
+  const [notifTarget, setNotifTarget] = useState<'all' | 'citizens' | 'officials'>('all');
 
   // Create Official Form State
   const [newOfficialName, setNewOfficialName] = useState('');
@@ -120,10 +127,23 @@ export default function MayorDashboard() {
         console.error("Failed to load wards from Firestore:", err);
       });
 
+      // 4. Listen to notifications
+      const unsubNotifs = onSnapshot(collection(db, 'notifications'), (snapshot) => {
+        const list: AppNotification[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as AppNotification);
+        });
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        setNotificationsList(list);
+      }, (err) => {
+        console.error("Failed to load notifications from Firestore:", err);
+      });
+
       return () => {
         unsubReports();
         unsubOfficials();
         unsubWards();
+        unsubNotifs();
       };
     } else {
       // Fallback: local storage
@@ -153,6 +173,13 @@ export default function MayorDashboard() {
         localStorage.setItem('nammude_wards', JSON.stringify(DEFAULT_WARDS));
         setWardsList(DEFAULT_WARDS);
       }
+
+      const storedNotifs = localStorage.getItem('nammude_notifications');
+      if (storedNotifs) {
+        setNotificationsList(JSON.parse(storedNotifs));
+      } else {
+        setNotificationsList([]);
+      }
     }
   }, [router]);
 
@@ -177,6 +204,114 @@ export default function MayorDashboard() {
       observer.disconnect();
     };
   }, [activeTab, mounted, officials]);
+
+  const handleCreateNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuccessMsg('');
+    setErrorMsg('');
+    if (!notifTitle.trim() || !notifContent.trim()) {
+      setErrorMsg('Please fill in both title and content.');
+      return;
+    }
+    const newNotif: AppNotification = {
+      id: `NOTIF-${Math.floor(1000 + Math.random() * 9000)}`,
+      title: notifTitle,
+      content: notifContent,
+      target: notifTarget,
+      sender: 'Mayor of Kozhikode',
+      senderRole: 'mayor',
+      date: new Date().toISOString(),
+      status: 'approved'
+    };
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'notifications', newNotif.id), newNotif);
+        setSuccessMsg('Notification broadcast successfully!');
+      } catch (err: any) {
+        console.error("Firestore send notif error:", err);
+        setErrorMsg(`Failed to send: ${err.message}`);
+        return;
+      }
+    } else {
+      const updated = [newNotif, ...notificationsList];
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+      setSuccessMsg('Notification broadcast successfully!');
+    }
+    setNotifTitle('');
+    setNotifContent('');
+  };
+
+  const handleApproveRequest = async (id: string) => {
+    setSuccessMsg('');
+    setErrorMsg('');
+    const targetNotif = notificationsList.find(n => n.id === id);
+    if (!targetNotif) return;
+    const approvedNotif: AppNotification = {
+      ...targetNotif,
+      status: 'approved',
+      approvedAt: new Date().toISOString(),
+      approvedBy: 'Mayor of Kozhikode'
+    };
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'notifications', id), approvedNotif);
+        setSuccessMsg('Notification request approved and published!');
+      } catch (err: any) {
+        console.error("Firestore approve request error:", err);
+        setErrorMsg(`Failed to approve: ${err.message}`);
+      }
+    } else {
+      const updated = notificationsList.map(n => n.id === id ? approvedNotif : n);
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+      setSuccessMsg('Notification request approved and published!');
+    }
+  };
+
+  const handleDenyRequest = async (id: string) => {
+    setSuccessMsg('');
+    setErrorMsg('');
+    const targetNotif = notificationsList.find(n => n.id === id);
+    if (!targetNotif) return;
+    const deniedNotif: AppNotification = {
+      ...targetNotif,
+      status: 'denied'
+    };
+    if (isFirebaseEnabled) {
+      try {
+        await setDoc(doc(db, 'notifications', id), deniedNotif);
+        setSuccessMsg('Notification request denied.');
+      } catch (err: any) {
+        console.error("Firestore deny request error:", err);
+        setErrorMsg(`Failed to deny: ${err.message}`);
+      }
+    } else {
+      const updated = notificationsList.map(n => n.id === id ? deniedNotif : n);
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+      setSuccessMsg('Notification request denied.');
+    }
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    setSuccessMsg('');
+    setErrorMsg('');
+    if (isFirebaseEnabled) {
+      try {
+        await deleteDoc(doc(db, 'notifications', id));
+        setSuccessMsg('Notification removed permanently.');
+      } catch (err: any) {
+        console.error("Firestore delete notif error:", err);
+        setErrorMsg(`Failed to delete: ${err.message}`);
+      }
+    } else {
+      const updated = notificationsList.filter(n => n.id !== id);
+      localStorage.setItem('nammude_notifications', JSON.stringify(updated));
+      setNotificationsList(updated);
+      setSuccessMsg('Notification removed permanently.');
+    }
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('nammude_user');
@@ -462,6 +597,26 @@ export default function MayorDashboard() {
             >
               <FaMapMarkerAlt style={{ fontSize: '20px' }} />
               <span>Manage Wards</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('Notifications')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 'var(--space-md)',
+                padding: 'var(--space-sm) var(--space-md)',
+                borderRadius: 'var(--radius-md)',
+                border: 'none',
+                background: activeTab === 'Notifications' ? 'var(--color-primary-container)' : 'transparent',
+                color: activeTab === 'Notifications' ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontWeight: activeTab === 'Notifications' ? 600 : 500,
+                transition: 'all 0.2s ease',
+                minHeight: '48px'
+              }}
+            >
+              <FaBell style={{ fontSize: '20px' }} />
+              <span>Notifications</span>
             </button>
 
             <button
@@ -941,6 +1096,198 @@ export default function MayorDashboard() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Tab View: Notifications */}
+          {activeTab === 'Notifications' && (
+            <div className="col-span-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '24px' }}>
+              
+              {/* Broadcast Notification Form */}
+              <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)', height: 'fit-content' }}>
+                <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Broadcast Notification</h3>
+                <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                  Send an official civic broadcast directly to citizens, officials, or all users.
+                </p>
+
+                <form onSubmit={handleCreateNotification} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Notification Title</label>
+                    <input 
+                      type="text" 
+                      className="input-field" 
+                      placeholder="e.g. Water Supply Interruption" 
+                      value={notifTitle}
+                      onChange={e => setNotifTitle(e.target.value)}
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-lowest)' }}
+                    />
+                  </div>
+
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Content / Description</label>
+                    <textarea 
+                      className="input-field" 
+                      placeholder="Type details about the warning, event, or announcement..." 
+                      value={notifContent}
+                      onChange={e => setNotifContent(e.target.value)}
+                      rows={4}
+                      style={{ padding: '10px 12px', fontSize: '13px', background: 'var(--color-surface-container-lowest)', fontFamily: 'inherit' }}
+                    />
+                  </div>
+
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontSize: '11px' }}>Target Audience</label>
+                    <select
+                      className="input-field"
+                      value={notifTarget}
+                      onChange={e => setNotifTarget(e.target.value as any)}
+                      style={{ minHeight: '40px', fontSize: '13px', background: 'var(--color-surface-container-lowest)', padding: '0 12px' }}
+                    >
+                      <option value="all">All Users (Citizens & Officials)</option>
+                      <option value="citizens">Citizens Only</option>
+                      <option value="officials">Officials Only</option>
+                    </select>
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    className="btn btn-primary btn-glow"
+                    style={{ borderRadius: 'var(--radius-full)', minHeight: '42px', fontSize: '13px', fontWeight: 700, marginTop: '8px', padding: '0 24px', alignSelf: 'flex-start' }}
+                  >
+                    Broadcast
+                  </button>
+                </form>
+              </div>
+
+              {/* Lists Panel: Pending Requests and History */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                
+                {/* Pending Requests Section */}
+                <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)' }}>
+                  <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Pending Official Requests</h3>
+                  <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                    Review notification proposals drafted by Ward Officials waiting for permission to dispatch to Citizens.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                    {notificationsList.filter(n => n.status === 'pending').length === 0 ? (
+                      <p className="body-sm" style={{ color: 'var(--color-outline)', textAlign: 'center', padding: '24px 0' }}>No pending notification requests.</p>
+                    ) : (
+                      notificationsList.filter(n => n.status === 'pending').map(n => (
+                        <div 
+                          key={n.id}
+                          style={{
+                            padding: '16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-outline-variant)',
+                            background: 'var(--color-surface-container-lowest)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '10px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <span className="chip" style={{ background: 'rgba(219, 68, 85, 0.08)', color: 'var(--color-error)', fontSize: '10px', marginBottom: '6px' }}>Target: {n.target}</span>
+                              <h4 className="label-lg" style={{ fontWeight: 800 }}>{n.title}</h4>
+                            </div>
+                            <span className="label-sm" style={{ color: 'var(--color-outline)' }}>
+                              {new Date(n.requestedAt || n.date).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>{n.content}</p>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', borderTop: '1px solid var(--color-outline-variant)', paddingTop: '10px' }}>
+                            <span className="label-sm" style={{ color: 'var(--color-outline)' }}>
+                              By: <strong>{n.sender}</strong> ({n.requestedBy})
+                            </span>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                onClick={() => handleApproveRequest(n.id)}
+                                style={{
+                                  padding: '6px 12px', borderRadius: 'var(--radius-full)', border: 'none',
+                                  fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                  background: 'rgba(53, 37, 205, 0.1)', color: 'var(--color-primary)',
+                                  display: 'flex', alignItems: 'center', gap: '4px'
+                                }}
+                              >
+                                <FaCheck /> Approve & Publish
+                              </button>
+                              <button
+                                onClick={() => handleDenyRequest(n.id)}
+                                style={{
+                                  padding: '6px 12px', borderRadius: 'var(--radius-full)', border: 'none',
+                                  fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                  background: 'rgba(186, 26, 26, 0.1)', color: 'var(--color-error)',
+                                  display: 'flex', alignItems: 'center', gap: '4px'
+                                }}
+                              >
+                                <FaTimes /> Deny
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* History Section */}
+                <div className="awwwards-bento-card stagger-fade-up" style={{ padding: 'var(--space-lg)' }}>
+                  <h3 className="headline-sm" style={{ fontWeight: 800, marginBottom: 'var(--space-sm)' }}>Broadcast History</h3>
+                  <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginBottom: 'var(--space-md)' }}>
+                    Track previously sent or approved public notices.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
+                    {notificationsList.filter(n => n.status !== 'pending').length === 0 ? (
+                      <p className="body-sm" style={{ color: 'var(--color-outline)', textAlign: 'center', padding: '24px 0' }}>No history records found.</p>
+                    ) : (
+                      notificationsList.filter(n => n.status !== 'pending').map(n => (
+                        <div 
+                          key={n.id}
+                          style={{
+                            padding: '16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-outline-variant)',
+                            background: 'var(--color-surface-container-lowest)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: '12px'
+                          }}
+                        >
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                              <span className="chip" style={{ fontSize: '9px', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)' }}>Target: {n.target}</span>
+                              <span className={`chip ${n.status === 'approved' ? 'chip-resolved' : 'chip-pending'}`} style={{ fontSize: '9px' }}>
+                                {n.status === 'approved' ? 'Active' : 'Denied'}
+                              </span>
+                            </div>
+                            <h4 className="label-lg" style={{ fontWeight: 800 }}>{n.title}</h4>
+                            <p className="body-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>{n.content}</p>
+                            <p className="label-sm" style={{ color: 'var(--color-outline)', marginTop: '8px' }}>
+                              Sent: {new Date(n.date).toLocaleString()} | By: {n.sender}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteNotification(n.id)}
+                            style={{
+                              padding: '8px', borderRadius: '50%', border: 'none',
+                              cursor: 'pointer', background: 'rgba(186, 26, 26, 0.1)', color: 'var(--color-error)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}
+                            title="Delete permanently"
+                          >
+                            <FaTrash size={12} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
             </div>
           )}
 
