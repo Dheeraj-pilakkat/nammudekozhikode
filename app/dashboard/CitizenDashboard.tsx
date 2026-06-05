@@ -3,10 +3,11 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { FaHome, FaFileAlt, FaExclamationTriangle, FaCheckCircle, FaUser, FaSignOutAlt, FaFileUpload, FaClock, FaCalendarAlt, FaCheck, FaChevronLeft, FaChevronRight, FaPlus, FaChartBar, FaDownload, FaFilter, FaPrint, FaDatabase, FaRoad, FaTint, FaLightbulb, FaTrash, FaMapMarkerAlt, FaTimes } from 'react-icons/fa';
+import { FaHome, FaFileAlt, FaExclamationTriangle, FaCheckCircle, FaUser, FaSignOutAlt, FaFileUpload, FaClock, FaCalendarAlt, FaCheck, FaChevronLeft, FaChevronRight, FaPlus, FaChartBar, FaDownload, FaFilter, FaPrint, FaDatabase, FaRoad, FaTint, FaLightbulb, FaTrash, FaMapMarkerAlt, FaTimes, FaBell } from 'react-icons/fa';
 import { db, isFirebaseEnabled } from '../lib/firebase';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { DEFAULT_WARDS, Ward } from '../lib/wards';
+import { AppNotification } from '../lib/notifications';
 
 interface Report {
   id: string;
@@ -32,6 +33,12 @@ export default function CitizenDashboard() {
   // Dynamic Wards state
   const [wardsList, setWardsList] = useState<Ward[]>([]);
 
+  // Notifications State
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
+  const [readNotifIds, setReadNotifIds] = useState<string[]>([]);
+  const [deletedNotifIds, setDeletedNotifIds] = useState<string[]>([]);
+
   // Issue Reporter Form State
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Roads');
@@ -52,6 +59,13 @@ export default function CitizenDashboard() {
 
   useEffect(() => {
     setMounted(true);
+
+    // Load read/deleted notifications state from localStorage on mount
+    const storedRead = localStorage.getItem('nammude_read_notifications');
+    if (storedRead) setReadNotifIds(JSON.parse(storedRead));
+    const storedDeleted = localStorage.getItem('nammude_deleted_notifications');
+    if (storedDeleted) setDeletedNotifIds(JSON.parse(storedDeleted));
+
     // Auth Check
     const storedUser = localStorage.getItem('nammude_user');
     if (!storedUser) {
@@ -98,9 +112,21 @@ export default function CitizenDashboard() {
         console.error("Failed to load wards from Firestore:", err);
       });
 
+      const unsubNotifs = onSnapshot(collection(db, 'notifications'), (snapshot) => {
+        const list: AppNotification[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as AppNotification);
+        });
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        setNotificationsList(list);
+      }, (err) => {
+        console.error("Failed to fetch notifications from Firestore:", err);
+      });
+
       return () => {
         unsubReports();
         unsubWards();
+        unsubNotifs();
       };
     } else {
       // Initialize Shared Reports Database in localStorage
@@ -118,6 +144,13 @@ export default function CitizenDashboard() {
       } else {
         localStorage.setItem('nammude_wards', JSON.stringify(DEFAULT_WARDS));
         setWardsList(DEFAULT_WARDS);
+      }
+
+      const storedNotifs = localStorage.getItem('nammude_notifications');
+      if (storedNotifs) {
+        setNotificationsList(JSON.parse(storedNotifs));
+      } else {
+        setNotificationsList([]);
       }
     }
   }, [router]);
@@ -145,6 +178,44 @@ export default function CitizenDashboard() {
       observer.disconnect();
     };
   }, [activeTab, mounted]);
+
+  const inboxNotifications = notificationsList
+    .filter(n => n.status === 'approved' && (n.target === 'citizens' || n.target === 'all'))
+    .filter(n => !deletedNotifIds.includes(n.id))
+    .map(n => ({
+      id: n.id,
+      title: n.title,
+      boldText: '',
+      suffix: n.content,
+      time: new Date(n.date).toLocaleString(),
+      read: readNotifIds.includes(n.id)
+    }));
+
+  const markAllAsRead = () => {
+    const activeIds = inboxNotifications.map(n => n.id);
+    const newRead = Array.from(new Set([...readNotifIds, ...activeIds]));
+    setReadNotifIds(newRead);
+    localStorage.setItem('nammude_read_notifications', JSON.stringify(newRead));
+  };
+
+  const deleteAllNotifications = () => {
+    const activeIds = inboxNotifications.map(n => n.id);
+    const newDeleted = Array.from(new Set([...deletedNotifIds, ...activeIds]));
+    setDeletedNotifIds(newDeleted);
+    localStorage.setItem('nammude_deleted_notifications', JSON.stringify(newDeleted));
+  };
+
+  const markAsRead = (id: string) => {
+    const newRead = Array.from(new Set([...readNotifIds, id]));
+    setReadNotifIds(newRead);
+    localStorage.setItem('nammude_read_notifications', JSON.stringify(newRead));
+  };
+
+  const deleteNotification = (id: string) => {
+    const newDeleted = Array.from(new Set([...deletedNotifIds, id]));
+    setDeletedNotifIds(newDeleted);
+    localStorage.setItem('nammude_deleted_notifications', JSON.stringify(newDeleted));
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('nammude_user');
@@ -398,9 +469,78 @@ export default function CitizenDashboard() {
               </span>
               <h1 className="display-lg" style={{ fontSize: 'clamp(1.5rem, 3vw, 2.2rem)' }}>Welcome, {user.name}</h1>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <p className="label-sm" style={{ color: 'var(--color-outline)' }}>Current Ward</p>
-              <h3 className="label-lg" style={{ color: 'var(--color-primary)', fontWeight: 800 }}>{user.ward}</h3>
+            <div style={{ display: 'flex', gap: 'var(--space-md)', alignItems: 'center' }}>
+              <div style={{ position: 'relative' }}>
+                <button 
+                  onClick={() => setShowNotifications(!showNotifications)}
+                  style={{ background: 'none', border: 'none', position: 'relative', cursor: 'pointer', padding: '8px' }}
+                >
+                  <FaBell style={{ fontSize: '20px', color: 'var(--color-on-surface-variant)' }} />
+                  {inboxNotifications.some(n => !n.read) && (
+                    <span style={{ position: 'absolute', top: '4px', right: '4px', width: '10px', height: '10px', backgroundColor: 'var(--color-error)', borderRadius: '50%' }}></span>
+                  )}
+                </button>
+
+                {/* Notifications Dropdown Menu */}
+                {showNotifications && (
+                  <div className="bento-card" style={{ 
+                    position: 'absolute', top: '100%', right: '0', 
+                    width: '380px', padding: '0', 
+                    zIndex: 100, overflow: 'hidden',
+                    marginTop: 'var(--space-xs)',
+                    boxShadow: 'var(--shadow-layer-3)'
+                  }}>
+                    <div style={{ padding: 'var(--space-md)', borderBottom: '1px solid var(--color-outline-variant)', backgroundColor: 'var(--color-surface-container-low)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h3 className="label-lg">Notifications</h3>
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <button onClick={markAllAsRead} className="label-sm hover:underline" style={{ background: 'none', border: 'none', color: 'var(--color-primary)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>Mark all read</button>
+                        <button onClick={deleteAllNotifications} className="label-sm hover:underline" style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>Delete all</button>
+                      </div>
+                    </div>
+                    <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                      {inboxNotifications.length === 0 ? (
+                        <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--color-outline)' }}>
+                          <p className="body-sm">No new notifications</p>
+                        </div>
+                      ) : (
+                        inboxNotifications.map(n => (
+                          <div key={n.id} style={{ 
+                            padding: 'var(--space-md)', 
+                            borderBottom: '1px solid var(--color-outline-variant)', 
+                            display: 'flex', 
+                            gap: 'var(--space-md)',
+                            backgroundColor: n.read ? 'transparent' : 'var(--color-surface-container-low)',
+                            position: 'relative',
+                            textAlign: 'left'
+                          }}>
+                            <div style={{ flex: 1, paddingRight: '60px' }}>
+                              <p className="body-sm" style={{ fontWeight: n.read ? 400 : 600 }}>
+                                {n.title} {n.suffix}
+                              </p>
+                              <p className="label-sm" style={{ color: 'var(--color-outline)', marginTop: '4px' }}>{n.time}</p>
+                            </div>
+                            <div style={{ position: 'absolute', right: 'var(--space-md)', top: 'var(--space-md)', display: 'flex', gap: '8px' }}>
+                              {!n.read && (
+                                <button onClick={() => markAsRead(n.id)} title="Mark as read" style={{ background: 'var(--color-surface-container-high)', border: 'none', cursor: 'pointer', color: 'var(--color-primary)', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <FaCheck style={{ fontSize: '10px' }} />
+                                </button>
+                              )}
+                              <button onClick={() => deleteNotification(n.id)} title="Delete" style={{ background: 'var(--color-surface-container-high)', border: 'none', cursor: 'pointer', color: 'var(--color-error)', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <FaTrash style={{ fontSize: '10px' }} />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ textAlign: 'right' }}>
+                <p className="label-sm" style={{ color: 'var(--color-outline)', margin: 0 }}>Current Ward</p>
+                <h3 className="label-lg" style={{ color: 'var(--color-primary)', fontWeight: 800, margin: 0 }}>{user.ward}</h3>
+              </div>
             </div>
           </header>
 
