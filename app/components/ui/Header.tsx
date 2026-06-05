@@ -3,15 +3,33 @@
 import Image from 'next/image';
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { FaBars, FaTimes, FaExclamationTriangle } from 'react-icons/fa';
+import { FaBars, FaTimes, FaExclamationTriangle, FaUserCircle, FaSignOutAlt } from 'react-icons/fa';
 
 function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [user, setUser] = useState<any>(null);
   const logoRef = useRef<HTMLDivElement>(null);
+
+  const checkUser = () => {
+    const stored = localStorage.getItem('nammude_user');
+    if (stored) {
+      try {
+        setUser(JSON.parse(stored));
+      } catch (e) {
+        setUser(null);
+      }
+    } else {
+      setUser(null);
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
+    checkUser();
+
+    // Listen to simulated authentication state changes
+    window.addEventListener('storage', checkUser);
 
     // Magnetic hover calculations for Logo
     const el = logoRef.current;
@@ -35,10 +53,19 @@ function Header() {
     el.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
+      window.removeEventListener('storage', checkUser);
       el.removeEventListener('mousemove', handleMouseMove);
       el.removeEventListener('mouseleave', handleMouseLeave);
     };
   }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('nammude_user');
+    window.dispatchEvent(new Event('storage'));
+    setUser(null);
+    setMenuOpen(false);
+    window.location.href = '/auth';
+  };
 
   return (
     <header 
@@ -109,20 +136,64 @@ function Header() {
         <Link href="/how-it-works" style={{ textDecoration: 'none' }}>
           <button className="nav-link sliding-underline" style={{ padding: '8px 12px' }}>How it works</button>
         </Link>
-        <Link href="/dashboard" style={{ textDecoration: 'none' }}>
-          <button 
-            className="btn btn-primary btn-glow btn-shimmer" 
-            style={{ 
-              borderRadius: 'var(--radius-full)', 
-              padding: '0 24px',
-              minHeight: '44px',
-              boxShadow: '0 4px 15px rgba(53, 37, 205, 0.3)'
-            }}
-          >
-            <FaExclamationTriangle size={14} style={{ marginRight: '8px' }} />
-            Report issue
-          </button>
+        <Link href="/dashboard/demo" style={{ textDecoration: 'none' }}>
+          <button className="nav-link sliding-underline" style={{ padding: '8px 12px' }}>Demo</button>
         </Link>
+
+        {user ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '8px' }}>
+            <Link href="/dashboard" style={{ textDecoration: 'none' }}>
+              <button 
+                className="btn btn-outline" 
+                style={{ 
+                  borderRadius: 'var(--radius-full)', 
+                  padding: '0 20px',
+                  minHeight: '40px',
+                  fontSize: '0.9rem',
+                  display: 'flex',
+                  gap: '8px'
+                }}
+              >
+                <FaUserCircle size={16} />
+                Portal
+              </button>
+            </Link>
+            <button 
+              onClick={handleLogout}
+              className="btn btn-primary"
+              style={{
+                borderRadius: 'var(--radius-full)',
+                padding: '0 16px',
+                minHeight: '40px',
+                fontSize: '0.9rem',
+                backgroundColor: 'rgba(186, 26, 26, 0.1)',
+                color: 'var(--color-error)'
+              }}
+            >
+              <FaSignOutAlt size={16} />
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '8px' }}>
+            <Link href="/auth" style={{ textDecoration: 'none' }}>
+              <button className="nav-link sliding-underline" style={{ padding: '8px 12px', fontWeight: 700 }}>Login</button>
+            </Link>
+            <Link href="/dashboard" style={{ textDecoration: 'none' }}>
+              <button 
+                className="btn btn-primary btn-glow btn-shimmer" 
+                style={{ 
+                  borderRadius: 'var(--radius-full)', 
+                  padding: '0 24px',
+                  minHeight: '44px',
+                  boxShadow: '0 4px 15px rgba(53, 37, 205, 0.3)'
+                }}
+              >
+                <FaExclamationTriangle size={14} style={{ marginRight: '8px' }} />
+                Report issue
+              </button>
+            </Link>
+          </div>
+        )}
       </nav>
 
       {/* Full-Screen Mobile Drawer Overlay */}
@@ -145,44 +216,106 @@ function Header() {
           <FaTimes size={24} />
         </button>
 
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '32px', width: '100%', padding: '0 24px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px', width: '100%', padding: '0 24px' }}>
           <Link href="/" style={{ textDecoration: 'none' }} onClick={() => setMenuOpen(false)}>
-            <div className="logo-container" style={{ flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+            <div className="logo-container" style={{ flexDirection: 'column', gap: '12px', marginBottom: '10px' }}>
               <Image src="/logo.png" alt="logo" width={70} height={70} style={{ borderRadius: '50%', boxShadow: '0 4px 15px rgba(53, 37, 205, 0.2)' }} />
               <h1 className="headline-md" style={{ color: 'var(--color-primary)', fontWeight: 900, textAlign: 'center' }}>Nammude Kozhikode</h1>
             </div>
           </Link>
 
           <Link href="/features" style={{ textDecoration: 'none', width: '100%', display: 'flex', justifyContent: 'center' }} onClick={() => setMenuOpen(false)}>
-            <button className="nav-link sliding-underline" style={{ fontSize: '1.5rem', fontWeight: 700, padding: '12px' }}>Features</button>
+            <button className="nav-link sliding-underline" style={{ fontSize: '1.3rem', fontWeight: 700, padding: '8px' }}>Features</button>
           </Link>
           
           <Link href="/officials" style={{ textDecoration: 'none', width: '100%', display: 'flex', justifyContent: 'center' }} onClick={() => setMenuOpen(false)}>
-            <button className="nav-link sliding-underline" style={{ fontSize: '1.5rem', fontWeight: 700, padding: '12px' }}>Officials</button>
+            <button className="nav-link sliding-underline" style={{ fontSize: '1.3rem', fontWeight: 700, padding: '8px' }}>Officials</button>
           </Link>
           
           <Link href="/how-it-works" style={{ textDecoration: 'none', width: '100%', display: 'flex', justifyContent: 'center' }} onClick={() => setMenuOpen(false)}>
-            <button className="nav-link sliding-underline" style={{ fontSize: '1.5rem', fontWeight: 700, padding: '12px' }}>How it works</button>
+            <button className="nav-link sliding-underline" style={{ fontSize: '1.3rem', fontWeight: 700, padding: '8px' }}>How it works</button>
           </Link>
 
-          <Link href="/dashboard" style={{ textDecoration: 'none', width: '100%', maxWidth: '280px', marginTop: '20px' }} onClick={() => setMenuOpen(false)}>
-            <button 
-              className="btn btn-primary btn-glow btn-shimmer" 
-              style={{ 
-                borderRadius: 'var(--radius-full)', 
-                width: '100%',
-                padding: '16px 24px',
-                fontSize: '1.1rem',
-                minHeight: '52px',
-                boxShadow: '0 4px 20px rgba(53, 37, 205, 0.4)',
-                display: 'flex',
-                gap: '8px'
-              }}
-            >
-              <FaExclamationTriangle size={16} />
-              Report issue
-            </button>
+          <Link href="/dashboard/demo" style={{ textDecoration: 'none', width: '100%', display: 'flex', justifyContent: 'center' }} onClick={() => setMenuOpen(false)}>
+            <button className="nav-link sliding-underline" style={{ fontSize: '1.3rem', fontWeight: 700, padding: '8px' }}>Demo Dashboard</button>
           </Link>
+
+          {user ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%', marginTop: '10px' }}>
+              <p className="label-md" style={{ color: 'var(--color-outline)' }}>Logged in as: <strong>{user.name}</strong></p>
+              <Link href="/dashboard" style={{ textDecoration: 'none', width: '100%', maxWidth: '280px' }} onClick={() => setMenuOpen(false)}>
+                <button 
+                  className="btn btn-outline" 
+                  style={{ 
+                    borderRadius: 'var(--radius-full)', 
+                    width: '100%',
+                    padding: '12px 24px',
+                    fontSize: '1rem',
+                    minHeight: '48px',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <FaUserCircle size={18} />
+                  My Dashboard
+                </button>
+              </Link>
+              <button 
+                onClick={handleLogout}
+                className="btn btn-primary"
+                style={{
+                  borderRadius: 'var(--radius-full)',
+                  width: '100%',
+                  maxWidth: '280px',
+                  padding: '12px 24px',
+                  fontSize: '1rem',
+                  minHeight: '48px',
+                  backgroundColor: 'rgba(186, 26, 26, 0.1)',
+                  color: 'var(--color-error)'
+                }}
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%', marginTop: '10px' }}>
+              <Link href="/auth" style={{ textDecoration: 'none', width: '100%', maxWidth: '280px' }} onClick={() => setMenuOpen(false)}>
+                <button 
+                  className="btn btn-outline" 
+                  style={{ 
+                    borderRadius: 'var(--radius-full)', 
+                    width: '100%',
+                    padding: '12px 24px',
+                    fontSize: '1rem',
+                    minHeight: '48px',
+                    fontWeight: 700
+                  }}
+                >
+                  Login
+                </button>
+              </Link>
+              <Link href="/dashboard" style={{ textDecoration: 'none', width: '100%', maxWidth: '280px' }} onClick={() => setMenuOpen(false)}>
+                <button 
+                  className="btn btn-primary btn-glow btn-shimmer" 
+                  style={{ 
+                    borderRadius: 'var(--radius-full)', 
+                    width: '100%',
+                    padding: '12px 24px',
+                    fontSize: '1rem',
+                    minHeight: '48px',
+                    boxShadow: '0 4px 20px rgba(53, 37, 205, 0.4)',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <FaExclamationTriangle size={16} />
+                  Report issue
+                </button>
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </header>
